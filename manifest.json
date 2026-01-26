@@ -1,13 +1,10 @@
 {
-	"id": "number-adder-obsidian",
-	"name": "Number Adder",
-	"version": "2.1.0",
-	"minAppVersion": "1.4.0",
-	"description": "Automatically number or re-number headings and formulas in an Obsidian document",
+	"id": "obsidian-note-assistant",
+	"name": "Note Assistant",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Note content assistant providing heading numbering and formula numbering features.",
 	"author": "Randy Allen",
 	"authorUrl": "https://github.com/RandyAllenEEE",
-	"isDesktopOnly": true
+	"isDesktopOnly": false
 }
-
-
-
