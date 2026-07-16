@@ -1,4 +1,4 @@
-import { type App, type Editor, editorInfoField, Plugin } from "obsidian";
+import { type App, type Command, type Editor, editorInfoField } from "obsidian";
 import type { EditorState } from "@codemirror/state";
 import { Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
@@ -17,6 +17,7 @@ export const HEADINGS = [0, 1, 2, 3, 4, 5, 6] as const;
 export class ShifterManager {
     app: App;
     plugin: NoteAssistantPlugin;
+    private isLoaded = false;
 
     constructor(app: App, plugin: NoteAssistantPlugin) {
         this.app = app;
@@ -24,6 +25,8 @@ export class ShifterManager {
     }
 
     onload() {
+        if (this.isLoaded) return;
+        this.isLoaded = true;
         this.addCommands();
     }
 
@@ -44,22 +47,21 @@ export class ShifterManager {
         HEADINGS.forEach((heading) => {
             const applyHeadingCmd = new ApplyHeading(settings, heading);
             this.plugin.addCommand({
-                ...applyHeadingCmd.createCommand(),
+                ...this.withGlobalGate(applyHeadingCmd.createCommand()),
                 // Unified naming: Use the ID from the command itself (e.g., 'shifter-apply-heading-0')
                 // Obsidian will prefix with 'obsidian-note-assistant:' automatically.
             });
         });
 
-        this.plugin.addCommand(increaseHeading.createCommand());
-        this.plugin.addCommand(increaseHeadingForced.createCommand());
-        this.plugin.addCommand(decreaseHeading.createCommand());
-        this.plugin.addCommand(insertHeadingAtCurrentLabel.createCommand());
-        this.plugin.addCommand(insertHeadingAtDeeperLevel.createCommand());
-        this.plugin.addCommand(insertHeadingAtHigherLevel.createCommand());
+        this.plugin.addCommand(this.withGlobalGate(increaseHeading.createCommand()));
+        this.plugin.addCommand(this.withGlobalGate(increaseHeadingForced.createCommand()));
+        this.plugin.addCommand(this.withGlobalGate(decreaseHeading.createCommand()));
+        this.plugin.addCommand(this.withGlobalGate(insertHeadingAtCurrentLabel.createCommand()));
+        this.plugin.addCommand(this.withGlobalGate(insertHeadingAtDeeperLevel.createCommand()));
+        this.plugin.addCommand(this.withGlobalGate(insertHeadingAtHigherLevel.createCommand()));
 
         // Register Keymap for Tab/Shift-Tab
-        if (settings.overrideTab) {
-            this.plugin.registerEditorExtension(
+        this.plugin.registerEditorExtension(
                 Prec.high(
                     keymap.of([
                         {
@@ -71,9 +73,9 @@ export class ShifterManager {
                         },
                     ]),
                 ),
-            );
+        );
 
-            this.plugin.registerEditorExtension(
+        this.plugin.registerEditorExtension(
                 Prec.high(
                     keymap.of([
                         {
@@ -85,14 +87,24 @@ export class ShifterManager {
                         },
                     ]),
                 ),
-            );
-        }
+        );
+    }
+
+    private withGlobalGate(command: Command): Command {
+        if (!command.editorCallback) return command;
+        const editorCallback = command.editorCallback;
+        return {
+            ...command,
+            editorCallback: (editor, view) => {
+                if (!this.plugin.settings.myHeadings.enabled) return false;
+                return editorCallback(editor, view);
+            },
+        };
     }
 
     // Helper from ObsidianService
     private getEditorFromState(state: EditorState): Editor | null {
         try {
-            // @ts-expect-error - editorInfoField is available at runtime
             return state.field(editorInfoField)?.editor ?? null;
         } catch (e) {
             console.error("Failed to get editor from state:", e);
@@ -108,6 +120,7 @@ export class ShifterManager {
         const { run } = config;
 
         return (view: EditorView): boolean => {
+            if (!this.plugin.settings.myHeadings.enabled || !this.plugin.settings.myHeadings.overrideTab) return false;
             const editor = this.getEditorFromState(view.state);
 
             if (!editor) {

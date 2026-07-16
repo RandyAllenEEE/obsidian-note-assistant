@@ -15,7 +15,7 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     autoNumberingDetails.style.padding = '0.5em';
 
     const autoNumberingSummary = autoNumberingDetails.createEl('summary');
-    autoNumberingSummary.setText(t('Auto Numbering'));
+    autoNumberingSummary.setText(t('headings.autoNumbering'));
     autoNumberingSummary.style.fontWeight = 'bold';
     autoNumberingSummary.style.cursor = 'pointer';
     autoNumberingSummary.style.outline = 'none';
@@ -26,8 +26,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     autoNumberingContent.style.borderLeft = '2px solid var(--background-modifier-border)';
 
     new Setting(autoNumberingContent)
-        .setName(t('Auto Number Headings'))
-        .setDesc(t('Create numbers automatically on blur'))
+        .setName(t('headings.autoNumber'))
+        .setDesc(t('headings.autoNumberDescription'))
         .addToggle(toggle => toggle
             .setValue(settings.auto)
             .onChange(async (value) => {
@@ -36,29 +36,32 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
             }));
 
     new Setting(autoNumberingContent)
-        .setName(t('First Level'))
+        .setName(t('headings.firstLevel'))
         .addSlider(slider => slider
             .setLimits(1, 6, 1)
             .setValue(settings.firstLevel)
             .setDynamicTooltip()
             .onChange(async (value) => {
                 settings.firstLevel = value;
+                if (settings.maxLevel < value) settings.maxLevel = value;
                 await manager.plugin.saveSettings();
             }));
 
     new Setting(autoNumberingContent)
-        .setName(t('Max Level'))
+        .setName(t('headings.maxLevel'))
         .addSlider(slider => slider
             .setLimits(1, 6, 1)
             .setValue(settings.maxLevel)
             .setDynamicTooltip()
             .onChange(async (value) => {
                 settings.maxLevel = value;
+                if (settings.firstLevel > value) settings.firstLevel = value;
                 await manager.plugin.saveSettings();
             }));
 
     // Style Grid
-    autoNumberingContent.createEl('h3', { text: t('Heading Styles') });
+    autoNumberingContent.createEl('h3', { text: t('headings.styles') });
+    autoNumberingContent.createEl('p', { text: t('headings.stylesCaseNote') });
     const stylesContainer = autoNumberingContent.createEl('div');
     stylesContainer.style.display = 'grid';
     stylesContainer.style.gridTemplateColumns = '0.5fr 1fr 1fr 1fr';
@@ -66,13 +69,13 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     stylesContainer.style.marginBottom = '20px';
 
     // Headers
-    stylesContainer.createEl('div', { text: t('Level'), attr: { style: 'font-weight: bold;' } });
-    stylesContainer.createEl('div', { text: t('Style'), attr: { style: 'font-weight: bold;' } });
-    stylesContainer.createEl('div', { text: t('Separator'), attr: { style: 'font-weight: bold;' } });
-    stylesContainer.createEl('div', { text: t('Start At'), attr: { style: 'font-weight: bold;' } });
+    stylesContainer.createEl('div', { text: t('common.level'), attr: { style: 'font-weight: bold;' } });
+    stylesContainer.createEl('div', { text: t('common.style'), attr: { style: 'font-weight: bold;' } });
+    stylesContainer.createEl('div', { text: t('common.separator'), attr: { style: 'font-weight: bold;' } });
+    stylesContainer.createEl('div', { text: t('common.startAt'), attr: { style: 'font-weight: bold;' } });
 
     const styleOptions = { '1': '1, 2, 3', 'a': 'a, b, c', 'A': 'A, B, C', 'I': 'I, II, III', '一': '一, 二, 三', '①': '①, ②, ③' };
-    const separatorOptions = { '': 'None', '.': '.', '-': '-', ':': ':', '—': '—' };
+    const separatorOptions = { '': t('common.none'), '.': '.', '-': '-', ':': ':', '—': '—' };
 
     for (let i = 0; i < 6; i++) {
         stylesContainer.createEl('div', { text: `H${i + 1}`, attr: { style: 'align-self: center;' } });
@@ -120,7 +123,7 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     shifterDetails.style.padding = '0.5em';
 
     const shifterSummary = shifterDetails.createEl('summary');
-    shifterSummary.setText(t('Heading Shifter'));
+    shifterSummary.setText(t('shifter.title'));
     shifterSummary.style.fontWeight = 'bold';
     shifterSummary.style.cursor = 'pointer';
     shifterSummary.style.outline = 'none';
@@ -131,8 +134,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     shifterContent.style.borderLeft = '2px solid var(--background-modifier-border)';
 
     new Setting(shifterContent)
-        .setName(t('Lower limit of Heading'))
-        .setDesc(t('The lower Heading Size that will be decreased by the Heading Shift'))
+        .setName(t('shifter.lowerLimit'))
+        .setDesc(t('shifter.lowerLimitDescription'))
         .addDropdown((dropdown) => {
             const headingOptions: Record<string, string> = {};
             [0, 1, 2, 3, 4, 5, 6].forEach(h => headingOptions[String(h)] = String(h));
@@ -146,8 +149,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         });
 
     new Setting(shifterContent)
-        .setName(t('Enable override tab behavior'))
-        .setDesc(t('Tab execute "Increase Headings" and Shift-Tab execute "Decrease Headings"'))
+        .setName(t('shifter.overrideTab'))
+        .setDesc(t('shifter.overrideTabDescription'))
         .addToggle((toggle) =>
             toggle
                 .setValue(settings.overrideTab)
@@ -158,13 +161,13 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         );
 
     // Style to remove
-    shifterContent.createEl('h3', { text: t("Style to remove") });
-    shifterContent.createEl('p', { text: t("If this style is at the position of a line, remove it") });
+    shifterContent.createEl('h3', { text: t('shifter.styleToRemove') });
+    shifterContent.createEl('p', { text: t('shifter.styleToRemoveDescription') });
 
-    shifterContent.createEl("b", { text: t("Beginning") });
+    shifterContent.createEl('b', { text: t('shifter.beginning') });
     new Setting(shifterContent)
-        .setName(t("Unordered list"))
-        .setDesc("-")
+        .setName(t('shifter.unorderedList'))
+        .setDesc(t('shifter.unorderedListExample'))
         .addToggle((toggle) =>
             toggle
                 .setValue(settings.styleToRemove?.beginning?.ul)
@@ -174,8 +177,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 }),
         );
     new Setting(shifterContent)
-        .setName(t("Ordered list"))
-        .setDesc("1., 2. ,3. ,...")
+        .setName(t('shifter.orderedList'))
+        .setDesc(t('shifter.orderedListExample'))
         .addToggle((toggle) =>
             toggle
                 .setValue(settings.styleToRemove?.beginning?.ol)
@@ -185,8 +188,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 }),
         );
     new Setting(shifterContent)
-        .setName(t("User defined"))
-        .setDesc(t("Arbitrary string (regular expression)"))
+        .setName(t('shifter.userDefined'))
+        .setDesc(t('shifter.regexDescription'))
         .addTextArea((str) => {
             str
                 .setValue(settings.styleToRemove.beginning?.userDefined?.join("\n"))
@@ -196,10 +199,10 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 });
         });
 
-    shifterContent.createEl("b", { text: t("Surrounding") });
+    shifterContent.createEl('b', { text: t('shifter.surrounding') });
     new Setting(shifterContent)
-        .setName(t("Bold"))
-        .setDesc("**|__")
+        .setName(t('shifter.bold'))
+        .setDesc(t('shifter.boldExample'))
         .addToggle((toggle) =>
             toggle
                 .setValue(settings.styleToRemove?.surrounding?.bold)
@@ -209,8 +212,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 }),
         );
     new Setting(shifterContent)
-        .setName(t("Italic"))
-        .setDesc("*|_")
+        .setName(t('shifter.italic'))
+        .setDesc(t('shifter.italicExample'))
         .addToggle((toggle) =>
             toggle
                 .setValue(settings.styleToRemove?.surrounding?.italic)
@@ -220,8 +223,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 }),
         );
     new Setting(shifterContent)
-        .setName(t("User defined"))
-        .setDesc(t("Arbitrary string (regular expression)"))
+        .setName(t('shifter.userDefined'))
+        .setDesc(t('shifter.regexDescription'))
         .addTextArea((str) => {
             str
                 .setValue(settings.styleToRemove?.surrounding?.userDefined?.join("\n"))
@@ -231,14 +234,14 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 });
         });
 
-    shifterContent.createEl("h3", { text: t("List") });
+    shifterContent.createEl('h3', { text: t('shifter.list') });
     new Setting(shifterContent)
-        .setName(t("Children behavior"))
+        .setName(t('shifter.childrenBehavior'))
         .addDropdown((dropdown) => {
             dropdown
-                .addOption("outdent to zero", t("Outdent to 0"))
-                .addOption("sync with headings", t("Sync with headings"))
-                .addOption("noting", t("Noting"))
+                .addOption("outdent to zero", t('shifter.outdentToZero'))
+                .addOption("sync with headings", t('shifter.syncWithHeadings'))
+                .addOption("noting", t('shifter.nothing'))
                 .setValue(settings.list.childrenBehavior)
                 .onChange((v: any) => {
                     settings.list.childrenBehavior = v;
@@ -246,8 +249,8 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 });
         });
 
-    shifterContent.createEl("h3", { text: t("Editor") });
-    new Setting(shifterContent).setName(t("Tab size")).addSlider((cb) => {
+    shifterContent.createEl('h3', { text: t('shifter.editor') });
+    new Setting(shifterContent).setName(t('shifter.tabSize')).addSlider((cb) => {
         cb.setDynamicTooltip()
             .setLimits(2, 8, 2)
             .setValue(settings.editor.tabSize)

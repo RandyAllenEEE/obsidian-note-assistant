@@ -53,7 +53,7 @@ export class IncreaseHeading {
 
         // Do not increase If it contains more than heading 6 .
         if (maxHeading !== undefined && maxHeading >= 6) {
-            new Notice("Cannot Increase (contains more than Heading 6)");
+            new Notice(t('notice.cannotIncreasePastH6'));
             return true;
         }
 
@@ -84,8 +84,8 @@ export class IncreaseHeading {
         return {
             id: `heading-shifter-increase-heading${this.includesNoHeadingsLine ? "-forced" : ""}`,
             name: this.includesNoHeadingsLine
-                ? t("Increase Headings (forced)")
-                : t("Increase Headings"),
+                ? t('command.increaseHeadingsForced')
+                : t('command.increaseHeadings'),
             icon: "headingShifter_increaseIcon", // Should check if icon exists or use default
             editorCallback: this.editorCallback,
         };
@@ -122,11 +122,9 @@ export class DecreaseHeading {
             minHeading !== undefined &&
             minHeading <= Number(this.settings.limitHeadingFrom)
         ) {
-            new Notice(
-                `Cannot Decrease (contains less than Heading${Number(
-                    this.settings.limitHeadingFrom,
-                )})`,
-            );
+            new Notice(t('notice.cannotDecreasePastLimit', {
+                level: Number(this.settings.limitHeadingFrom),
+            }));
             return true;
         }
 
@@ -154,7 +152,7 @@ export class DecreaseHeading {
     createCommand = () => {
         return {
             id: "heading-shifter-decrease-heading",
-            name: t("Decrease Headings"),
+            name: t('command.decreaseHeadings'),
             icon: "headingShifter_decreaseIcon",
             editorCallback: this.editorCallback,
         };

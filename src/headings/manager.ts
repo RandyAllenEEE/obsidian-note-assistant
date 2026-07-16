@@ -1,27 +1,32 @@
-import { App, Editor, MarkdownView, debounce } from 'obsidian';
+import { App, MarkdownView, TFile } from 'obsidian';
 import NoteAssistantPlugin from '../main';
+import { MyHeadingsSettings } from '../settings';
+import { AmbiguousCleanupModal } from '../utils/cleanup-modal';
+import { applyEditorEdits } from '../utils/editor-reconcile';
 import {
-    firstNumberingTokenInStyle,
-    makeNumberingString,
-    nextNumberingToken,
-    NumberingToken
-} from '../utils/numbering-tokens';
-import {
-    findHeadingPrefixRange,
-    getCodeBlockRanges,
-    isLineIgnored,
-    makeHeadingHashString,
-    replaceRangeEconomically,
-    restoreCursor
-} from '../utils/text-processing';
-import { parseHeadingsFrontMatter } from '../utils/frontmatter';
+    ParsedHeadingsFrontMatter,
+    parseHeadingsFrontMatter,
+    ReconcileIntent,
+    resolveReconcileIntent,
+} from '../utils/frontmatter';
 import { HeadingsControlModal } from './modal';
-import { t } from '../i18n/helpers';
+import { HeadingReconcilePlan, planHeadingReconcile } from './reconcile';
 import { ShifterManager } from './shifter/manager';
 
 export const DEFAULT_HEADING_STYLES = ['1', 'a', 'A', '一', '①', '1'];
 export const DEFAULT_HEADING_SEPARATORS = ['', '-', ':', '.', '—', '-'];
 export const DEFAULT_HEADING_START_VALUES = ['0', '1', '1', '1', '1', '1'];
+
+export interface HeadingExecutionPlan extends HeadingReconcilePlan {
+    filePath: string;
+    source: string;
+}
+
+export interface NumberingRunResult {
+    changed: boolean;
+    ambiguousLines: number[];
+    skipped: boolean;
+}
 
 export class HeadingsManager {
     app: App;
@@ -35,153 +40,110 @@ export class HeadingsManager {
         this.shifterManager = new ShifterManager(app, plugin);
     }
 
-    async onload() {
+    async onload(): Promise<void> {
         if (this.isLoaded) return;
         this.isLoaded = true;
-
-        // Initialize Shifter Manager
         this.shifterManager.onload();
-
     }
 
-    openControlModal() {
-        if (!this.isLoaded) return;
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView && activeView.file) {
-            new HeadingsControlModal(this.app, this.plugin, activeView.file).open();
-        }
-    }
-
-    onunload() {
+    onunload(): void {
         if (!this.isLoaded) return;
         this.isLoaded = false;
         this.shifterManager.onunload();
     }
 
-    getActiveViewInfo() {
+    openControlModal(): void {
+        if (!this.isLoaded || !this.plugin.settings.myHeadings.enabled) return;
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView && activeView.file) {
-            const data = this.app.metadataCache.getFileCache(activeView.file);
-            const editor = activeView.editor;
-            if (data && editor) {
-                return { activeView, data, editor };
-            }
-        }
-        return undefined;
+        if (activeView?.file) new HeadingsControlModal(this.app, this.plugin, activeView.file).open();
     }
 
-    getEffectiveSettings(fm: any) {
+    getActiveViewInfo() {
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView?.file || !activeView.editor) return undefined;
+        return {
+            activeView,
+            file: activeView.file,
+            editor: activeView.editor,
+            data: this.app.metadataCache.getFileCache(activeView.file),
+        };
+    }
+
+    getEffectiveSettings(fm: Parameters<typeof parseHeadingsFrontMatter>[0]): ParsedHeadingsFrontMatter {
         return parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings);
     }
 
-    // Returns true if changes were made
-    updateNumbering(force: boolean = false, performRestore: boolean = true): boolean {
-        const info = this.getActiveViewInfo();
-        if (!info) return false;
-
-        const { data, editor } = info;
-        const settings = this.getEffectiveSettings(data.frontmatter);
-
-        if (!settings.enabled && !force) return false;
-
-        const cursorBefore = editor.getCursor();
-        const scrollBefore = editor.getScrollInfo();
-
-        const headings = data.headings ?? [];
-        if (headings.length === 0) return false;
-
-        const codeRanges = getCodeBlockRanges(data);
-        const headingStyles = settings.headingStyles || DEFAULT_HEADING_STYLES;
-        const headingSeparators = settings.headingSeparators || DEFAULT_HEADING_SEPARATORS;
-        const headingStartValues = settings.headingStartValues || DEFAULT_HEADING_START_VALUES;
-
-        let previousLevel = settings.firstLevel - 1;
-        let numberingStack: NumberingToken[] = [];
-        const changes: any[] = [];
-
-        for (const heading of headings) {
-            const level = heading.level;
-            const lineNum = heading.position.start.line;
-            const lineText = editor.getLine(lineNum);
-
-            if (isLineIgnored(lineNum, lineText, codeRanges)) continue;
-
-            // 1. Skip levels before firstLevel
-            if (settings.firstLevel > level) {
-                previousLevel = settings.firstLevel - 1;
-                numberingStack = [];
-                continue;
-            }
-
-            // 2. Skip specific skipped headings
-            if (settings.skipHeadings && settings.skipHeadings.length > 0) {
-                if (heading.heading.endsWith(settings.skipHeadings)) continue;
-            }
-
-            // 3. Adjust Stack
-            if (level === previousLevel) {
-                const x = numberingStack.pop();
-                if (x) numberingStack.push(nextNumberingToken(x));
-            } else if (level < previousLevel) {
-                for (let i = previousLevel; i > level; i--) numberingStack.pop();
-                const x = numberingStack.pop();
-                if (x) numberingStack.push(nextNumberingToken(x));
-            } else if (level > previousLevel) {
-                for (let i = previousLevel; i < level; i++) {
-                    const styleIndex = Math.min(i, headingStyles.length - 1);
-                    const startVal = headingStartValues[styleIndex] !== undefined ? headingStartValues[styleIndex] : '1';
-                    numberingStack.push(firstNumberingTokenInStyle(headingStyles[styleIndex] as any, startVal));
-                }
-            }
-
-            previousLevel = level;
-
-            if (level > settings.maxLevel) continue;
-
-            const prefixRange = findHeadingPrefixRange(editor, heading);
-            if (!prefixRange) continue;
-
-            const headingHashString = makeHeadingHashString(editor, heading);
-            if (!headingHashString) continue;
-
-            const prefixString = makeNumberingString(numberingStack, headingSeparators);
-            const separator = headingSeparators[0] || '';
-
-            replaceRangeEconomically(editor, changes, prefixRange, headingHashString + prefixString + separator + ' ');
-        }
-
-        if (changes.length > 0) {
-            editor.transaction({ changes: changes });
-            if (performRestore) {
-                restoreCursor(editor, cursorBefore);
-                editor.scrollTo(scrollBefore.left, scrollBefore.top);
-            }
-            return true;
-        }
-        return false;
+    buildPlan(
+        file: TFile,
+        source: string,
+        parsed: ParsedHeadingsFrontMatter,
+        intent: ReconcileIntent,
+    ): HeadingExecutionPlan | undefined {
+        if (!this.plugin.settings.myHeadings.enabled || parsed.policy === 'off' || parsed.policy === 'invalid') return undefined;
+        const records = this.plugin.getOwnershipRecords('headings', file.path);
+        return {
+            ...planHeadingReconcile(source, parsed.settings, intent, records),
+            filePath: file.path,
+            source,
+        };
     }
 
-    removeNumbering() {
-        const info = this.getActiveViewInfo();
-        if (!info) return;
-        const { data, editor } = info;
+    async commitPlan(plan: HeadingExecutionPlan): Promise<void> {
+        await this.plugin.setOwnershipRecords('headings', plan.filePath, plan.records);
+    }
 
-        const changes: any[] = [];
-        const headings = data.headings ?? [];
-        if (headings.length === 0) return;
-
-
-        for (const heading of headings) {
-            const prefixRange = findHeadingPrefixRange(editor, heading);
-            if (!prefixRange) continue;
-            const headingHashString = makeHeadingHashString(editor, heading);
-            if (!headingHashString) continue;
-
-            replaceRangeEconomically(editor, changes, prefixRange, headingHashString + ' ');
+    async reconcileView(
+        view: MarkdownView,
+        parsed?: ParsedHeadingsFrontMatter,
+        explicitIntent?: ReconcileIntent,
+    ): Promise<NumberingRunResult> {
+        if (!this.plugin.settings.myHeadings.enabled || !view.file) {
+            return { changed: false, ambiguousLines: [], skipped: true };
+        }
+        const resolved = parsed ?? this.getEffectiveSettings(this.app.metadataCache.getFileCache(view.file)?.frontmatter);
+        const intent = resolveReconcileIntent(this.plugin.settings.myHeadings.enabled, resolved.policy, explicitIntent);
+        if (!intent) {
+            return { changed: false, ambiguousLines: [], skipped: true };
         }
 
-        if (changes.length > 0) {
-            editor.transaction({ changes });
+        const source = view.editor.getValue();
+        const plan = this.buildPlan(view.file, source, resolved, intent);
+        if (!plan) return { changed: false, ambiguousLines: [], skipped: true };
+        if (view.file.path !== plan.filePath || view.editor.getValue() !== source) {
+            return { changed: false, ambiguousLines: plan.ambiguousLines, skipped: true };
         }
+        const changed = applyEditorEdits(view.editor, source, plan.edits);
+        if (plan.edits.length === 0 || changed) await this.commitPlan(plan);
+        return { changed, ambiguousLines: plan.ambiguousLines, skipped: false };
+    }
+
+    async applySettingsToFile(file: TFile, settings: MyHeadingsSettings, intent: ReconcileIntent): Promise<NumberingRunResult> {
+        if (!this.plugin.settings.myHeadings.enabled) return { changed: false, ambiguousLines: [], skipped: true };
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file || view.file.path !== file.path) return { changed: false, ambiguousLines: [], skipped: true };
+        const parsed: ParsedHeadingsFrontMatter = {
+            policy: intent === 'clear' ? 'none' : 'manual',
+            settings,
+            errors: [],
+            inherited: false,
+        };
+        return this.reconcileView(view, parsed, intent);
+    }
+
+    openAmbiguousCleanup(file: TFile, settings: MyHeadingsSettings): boolean {
+        if (!this.plugin.settings.myHeadings.enabled) return false;
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file || view.file.path !== file.path) return false;
+        const source = view.editor.getValue();
+        const parsed: ParsedHeadingsFrontMatter = {
+            policy: 'none',
+            settings,
+            errors: [],
+            inherited: false,
+        };
+        const plan = this.buildPlan(file, source, parsed, 'clear');
+        if (!plan || plan.ambiguousCandidates.length === 0) return false;
+        new AmbiguousCleanupModal(this.app, file, source, plan.ambiguousCandidates).open();
+        return true;
     }
 }

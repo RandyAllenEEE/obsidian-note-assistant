@@ -4,6 +4,33 @@ A comprehensive toolkit for structural document management in Obsidian, designed
 
 This plugin combines advanced heading management, automatic numbering, and formula indexing into a single, cohesive workflow.
 
+## Per-note frontmatter
+
+Numbering settings remain ordinary text properties so they render in Obsidian Properties. Existing compact values continue to work:
+
+```yaml
+---
+number headings: auto, 1-6, 111111, ....., 111111
+number formulas: auto, continuous
+---
+```
+
+The first field controls per-note behavior:
+
+- `auto` maintains numbering automatically.
+- `none` removes numbering managed by the current configuration and keeps the note unnumbered.
+- `off` leaves existing content unchanged.
+- Omitting the state field keeps the compact configuration in manual mode.
+
+For example, changing only the first field preserves the numbering pattern:
+
+```yaml
+number headings: none, 1-6, 111111, ....., 111111
+number formulas: none, heading-based(4)
+```
+
+The global heading/formula module switches always take precedence. When a module is disabled, a note-level `auto` or `none` value cannot modify note content.
+
 ## 🌟 Features
 
 ### 🔢 MyHeadings - Intelligent Heading Numbering

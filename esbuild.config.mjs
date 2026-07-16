@@ -42,25 +42,24 @@ const context = await esbuild.context({
 });
 
 const copyFiles = () => {
-    try {
-        if (!fs.existsSync('build')) fs.mkdirSync('build');
-        fs.copyFileSync('manifest.json', 'build/manifest.json');
-        if (fs.existsSync('styles.css')) {
-            fs.copyFileSync('styles.css', 'build/styles.css');
-        }
-        if (fs.existsSync('versions.json')) {
-            fs.copyFileSync('versions.json', 'build/versions.json');
-        }
-        console.log('Copied static files to build/');
-    } catch (e) {
-        console.error('Failed to copy files:', e);
+    if (!fs.existsSync('build')) fs.mkdirSync('build');
+    fs.copyFileSync('manifest.json', 'build/manifest.json');
+    if (fs.existsSync('styles.css')) {
+        fs.copyFileSync('styles.css', 'build/styles.css');
     }
+    if (fs.existsSync('versions.json')) {
+        fs.copyFileSync('versions.json', 'build/versions.json');
+    }
+    console.log('Copied static files to build/');
 }
 
 if (prod) {
-    await context.rebuild();
-    copyFiles();
-    process.exit(0);
+    try {
+        await context.rebuild();
+        copyFiles();
+    } finally {
+        await context.dispose();
+    }
 } else {
     copyFiles();
     await context.watch();

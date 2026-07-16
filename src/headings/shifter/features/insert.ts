@@ -45,7 +45,7 @@ export class InsertHeadingAtCurrentLevel {
     createCommand = (): Command => {
         return {
             id: `heading-shifter-insert-heading-current`,
-            name: t("Insert Heading at current level"),
+            name: t('command.insertHeadingCurrent'),
             icon: `headingShifter_heading`,
             editorCallback: this.editorCallback,
         };
@@ -69,7 +69,7 @@ export class InsertHeadingAtDeeperLevel {
             : 0;
 
         if (headingLevel + 1 > 6) {
-            new Notice("Cannot Increase (contains more than Heading 6)");
+            new Notice(t('notice.cannotIncreasePastH6'));
             return true;
         }
 
@@ -99,7 +99,7 @@ export class InsertHeadingAtDeeperLevel {
     createCommand = (): Command => {
         return {
             id: `heading-shifter-insert-heading-deeper`,
-            name: t("Insert Heading at one level deeper"),
+            name: t('command.insertHeadingDeeper'),
             icon: `headingShifter_heading`,
             editorCallback: this.editorCallback,
         };
@@ -148,7 +148,7 @@ export class InsertHeadingAtHigherLevel {
     createCommand = (): Command => {
         return {
             id: `heading-shifter-insert-heading-higher`,
-            name: t("Insert Heading at one level higher"),
+            name: t('command.insertHeadingHigher'),
             icon: `headingShifter_heading`,
             editorCallback: this.editorCallback,
         };

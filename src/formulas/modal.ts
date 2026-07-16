@@ -1,128 +1,165 @@
-import { App, Modal, Setting, TFile, Notice } from 'obsidian';
+import { App, Modal, Notice, Setting, TFile } from 'obsidian';
 import NoteAssistantPlugin from '../main';
 import { t } from '../i18n/helpers';
-import { parseFormulasFrontMatter, saveSettingsToFrontMatter } from '../utils/frontmatter';
+import { formatFrontMatterDiagnostics, formatSaveError } from '../i18n/diagnostics';
+import {
+    FileNumberingPolicy,
+    FrontMatterDiagnostic,
+    parseFormulasFrontMatter,
+    saveSettingsToFrontMatter,
+} from '../utils/frontmatter';
 import { MyFormulasSettings } from '../settings';
 
+type EditablePolicy = Exclude<FileNumberingPolicy, 'invalid'>;
+
 export class FormulasControlModal extends Modal {
-    plugin: NoteAssistantPlugin;
-    file: TFile;
-    settings: MyFormulasSettings;
+    private readonly plugin: NoteAssistantPlugin;
+    private readonly file: TFile;
+    private settings: MyFormulasSettings;
+    private policy: EditablePolicy;
+    private parseErrors: FrontMatterDiagnostic[];
+    private unsupportedTokens: string[];
+    private rawValue?: string;
+    private originalSettings: string;
 
     constructor(app: App, plugin: NoteAssistantPlugin, file: TFile) {
         super(app);
         this.plugin = plugin;
         this.file = file;
-        const cache = app.metadataCache.getFileCache(file);
-        const fm = cache ? cache.frontmatter : undefined;
-        this.settings = JSON.parse(JSON.stringify(parseFormulasFrontMatter(fm, this.plugin.settings.myFormulas)));
+        const parsed = parseFormulasFrontMatter(app.metadataCache.getFileCache(file)?.frontmatter, plugin.settings.myFormulas);
+        this.settings = parsed.settings;
+        this.policy = parsed.policy === 'invalid' ? 'off' : parsed.policy;
+        this.parseErrors = parsed.errors;
+        this.unsupportedTokens = parsed.unsupportedTokens ?? [];
+        this.rawValue = parsed.rawValue;
+        this.originalSettings = this.settingsSignature();
     }
 
-    onOpen() {
+    onOpen(): void {
         this.display();
     }
 
-    display() {
+    private display(): void {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h2', { text: t('Configure Formulas') });
-
-        // Auto Toggle
-        new Setting(contentEl)
-            .setName(t('Auto Number Formulas'))
-            .setDesc(t('Automatically number formulas on blur'))
-            .addToggle(toggle => toggle
-                .setValue(this.settings.auto)
-                .onChange(v => this.settings.auto = v));
-
-        // Mode
-        new Setting(contentEl)
-            .setName(t('Numbering Mode'))
-            .setDesc(t('Continuous (1, 2, 3) or Heading-based (1.1-1, 1.1-2)'))
-            .addDropdown(dropdown => dropdown
-                .addOption('continuous', t('Continuous'))
-                .addOption('heading-based', t('Heading-based'))
-                .setValue(this.settings.mode)
-                .onChange(v => {
-                    this.settings.mode = v as 'continuous' | 'heading-based';
-                    this.display(); // Re-render for depth slider
-                }));
-
-        // Max Depth (Conditional)
-        if (this.settings.mode === 'heading-based') {
-            new Setting(contentEl)
-                .setName(t('Max Heading Depth'))
-                .setDesc(t('Maximum heading level to use for formula numbering'))
-                .addSlider(slider => slider
-                    .setLimits(1, 6, 1)
-                    .setValue(this.settings.maxDepth)
-                    .setDynamicTooltip()
-                    .onChange(v => this.settings.maxDepth = v));
+        contentEl.createEl('h2', { text: t('command.configureFormulas') });
+        if (this.parseErrors.length > 0) {
+            contentEl.createEl('p', { text: formatFrontMatterDiagnostics(this.parseErrors), cls: 'mod-warning' });
         }
 
-        // Action Buttons
-        const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+        new Setting(contentEl)
+            .setName(t('numbering.behavior'))
+            .setDesc(t('numbering.behaviorDescription'))
+            .addDropdown(dropdown => dropdown
+                .addOption('manual', t('numbering.manual'))
+                .addOption('auto', t('numbering.auto'))
+                .addOption('none', t('numbering.none'))
+                .addOption('off', t('numbering.off'))
+                .setValue(this.policy)
+                .onChange(value => {
+                    this.policy = value as EditablePolicy;
+                    this.settings.auto = this.policy === 'auto';
+                    this.display();
+                }));
 
+        if (this.policy === 'manual' || this.policy === 'auto') this.renderNumberingSettings(contentEl);
+        else contentEl.createEl('p', {
+            text: this.policy === 'none'
+                ? t('numbering.formulaNoneDescription')
+                : t('numbering.formulaOffDescription'),
+        });
+
+        const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
         new Setting(buttonContainer)
-            .addButton(btn => btn
-                .setButtonText(t('Apply Now'))
-                .setTooltip(t('Apply numbering once without saving to frontmatter'))
-                .onClick(() => {
-                    this.applyNumbering();
+            .addButton(button => button
+                .setButtonText(t('numbering.applyNow'))
+                .setTooltip(t('numbering.applyNowTooltip'))
+                .onClick(async () => {
+                    await this.applyCurrentPolicy();
                     this.close();
                 }))
-            .addButton(btn => btn
-                .setButtonText(t('Save to Frontmatter'))
-                .setTooltip(t('Save settings to frontmatter and apply'))
+            .addButton(button => button
+                .setButtonText(t('numbering.saveToFrontmatter'))
+                .setTooltip(t('numbering.saveTooltip'))
                 .setCta()
                 .onClick(async () => {
-                    await this.saveAndApply();
-                    this.close();
+                    if (await this.saveAndApply()) this.close();
                 }))
-            .addButton(btn => btn
-                .setButtonText(t('Remove Numbering'))
+            .addButton(button => button
+                .setButtonText(t('numbering.remove'))
                 .setWarning()
-                .onClick(() => {
-                    this.plugin.formulasManager.removeNumbering();
-                    new Notice(t('Formula numbering removed'));
+                .onClick(async () => {
+                    const result = await this.plugin.formulasManager.applySettingsToFile(this.file, this.settings, 'clear');
+                    if (result.skipped) new Notice(t('notice.targetInactive'));
+                    else {
+                        new Notice(t('notice.formulaRemoved'));
+                        this.plugin.formulasManager.openAmbiguousCleanup(this.file, this.settings);
+                    }
                     this.close();
                 }));
     }
 
-    applyNumbering() {
-        // Temporarily override effective settings
-        const info = this.plugin.formulasManager.getActiveViewInfo();
-        if (!info) return;
+    private renderNumberingSettings(contentEl: HTMLElement): void {
+        new Setting(contentEl)
+            .setName(t('formulas.mode'))
+            .setDesc(t('formulas.modeDescription'))
+            .addDropdown(dropdown => dropdown
+                .addOption('continuous', t('formulas.continuous'))
+                .addOption('heading-based', t('formulas.headingBased'))
+                .setValue(this.settings.mode)
+                .onChange(value => {
+                    this.settings.mode = value as 'continuous' | 'heading-based';
+                    this.display();
+                }));
 
-        // Save original settings
-        const originalSettings = this.plugin.settings.myFormulas;
-
-        // Temporarily replace with modal settings
-        this.plugin.settings.myFormulas = this.settings;
-
-        // Apply numbering (force=true to override enabled check)
-        this.plugin.formulasManager.updateNumbering(true, true);
-
-        // Restore original settings
-        this.plugin.settings.myFormulas = originalSettings;
-
-        new Notice(t('Formula numbering applied (one-time)'));
+        if (this.settings.mode === 'heading-based') {
+            new Setting(contentEl)
+                .setName(t('formulas.maxHeadingDepth'))
+                .setDesc(t('formulas.maxHeadingDepthDescription'))
+                .addSlider(slider => slider.setLimits(1, 6, 1).setValue(this.settings.maxDepth).setDynamicTooltip().onChange(value => {
+                    this.settings.maxDepth = value;
+                }));
+        }
     }
 
-    async saveAndApply() {
-        await saveSettingsToFrontMatter(this.app, this.file, undefined, this.settings);
-
-        // Force cache refresh
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Apply with frontmatter settings
-        this.plugin.formulasManager.updateNumbering(true, true);
-
-        new Notice(t('Settings saved to frontmatter and applied'));
+    private async applyCurrentPolicy(): Promise<void> {
+        if (this.policy === 'off') {
+            new Notice(t('notice.formulaUnchanged'));
+            return;
+        }
+        const intent = this.policy === 'none' ? 'clear' : 'number';
+        const result = await this.plugin.formulasManager.applySettingsToFile(this.file, this.settings, intent);
+        if (result.skipped) {
+            new Notice(t('notice.targetInactive'));
+            return;
+        }
+        if (intent === 'clear') this.plugin.formulasManager.openAmbiguousCleanup(this.file, this.settings);
+        new Notice(t('notice.behaviorApplied'));
     }
 
-    onClose() {
-        const { contentEl } = this;
-        contentEl.empty();
+    private async saveAndApply(): Promise<boolean> {
+        try {
+            await saveSettingsToFrontMatter(this.app, this.file, undefined, {
+                settings: this.settings,
+                policy: this.policy,
+                unsupportedTokens: this.unsupportedTokens,
+                rawValue: this.rawValue,
+                preserveTail: this.settingsSignature() === this.originalSettings,
+            });
+        } catch (error) {
+            new Notice(formatSaveError('notice.unableToSaveFormulas', error));
+            return false;
+        }
+        await this.applyCurrentPolicy();
+        new Notice(t('notice.settingsSaved'));
+        return true;
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
+    }
+
+    private settingsSignature(): string {
+        return JSON.stringify({ ...this.settings, enabled: true, auto: false });
     }
 }

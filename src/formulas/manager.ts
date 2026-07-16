@@ -1,14 +1,29 @@
-import { App, MarkdownView, Editor, Debouncer, debounce } from 'obsidian';
+import { App, MarkdownView, TFile } from 'obsidian';
 import NoteAssistantPlugin from '../main';
-import { getCodeBlockRanges, isLineIgnored, restoreCursor } from '../utils/text-processing';
-import { parseFormulasFrontMatter } from '../utils/frontmatter';
+import { MyFormulasSettings } from '../settings';
+import { AmbiguousCleanupModal } from '../utils/cleanup-modal';
+import { applyEditorEdits } from '../utils/editor-reconcile';
+import {
+    ParsedFormulasFrontMatter,
+    ParsedHeadingsFrontMatter,
+    parseFormulasFrontMatter,
+    parseHeadingsFrontMatter,
+    ReconcileIntent,
+    resolveReconcileIntent,
+} from '../utils/frontmatter';
 import { FormulasControlModal } from './modal';
-import { t } from '../i18n/helpers';
+import { FormulaReconcilePlan, planFormulaReconcile } from './reconcile';
 
-// Pre-compile Regex patterns for performance (Issue #10)
-const TAG_REGEX = /\\tag\{([^}]*)\}/;
-const TAG_REMOVE_REGEX = /\s*\\tag\{[^}]*\}/;
-const HEADING_NUMBER_REGEX = /^\s{0,4}#+\s*([0-9a-zA-Z\u4e00-\u9fa5\u2460-\u2473&⓪].*?)(\s|$)/;
+export interface FormulaExecutionPlan extends FormulaReconcilePlan {
+    filePath: string;
+    source: string;
+}
+
+export interface FormulaRunResult {
+    changed: boolean;
+    ambiguousLines: number[];
+    skipped: boolean;
+}
 
 export class FormulasManager {
     app: App;
@@ -20,263 +35,120 @@ export class FormulasManager {
         this.plugin = plugin;
     }
 
-    async onload() {
+    async onload(): Promise<void> {
         if (this.isLoaded) return;
         this.isLoaded = true;
-
-        // Command is now registered in main.ts
     }
 
-    openControlModal() {
-        if (!this.isLoaded) return;
-        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView && activeView.file) {
-            new FormulasControlModal(this.app, this.plugin, activeView.file).open();
-        }
-    }
-
-    onunload() {
-        if (!this.isLoaded) return;
+    onunload(): void {
         this.isLoaded = false;
+    }
+
+    openControlModal(): void {
+        if (!this.isLoaded || !this.plugin.settings.myFormulas.enabled) return;
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (activeView?.file) new FormulasControlModal(this.app, this.plugin, activeView.file).open();
     }
 
     getActiveViewInfo() {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (activeView && activeView.file) {
-            const data = this.app.metadataCache.getFileCache(activeView.file);
-            const editor = activeView.editor;
-            if (data && editor) {
-                return { activeView, data, editor };
-            }
-        }
-        return undefined;
+        if (!activeView?.file || !activeView.editor) return undefined;
+        return {
+            activeView,
+            file: activeView.file,
+            editor: activeView.editor,
+            data: this.app.metadataCache.getFileCache(activeView.file),
+        };
     }
 
-    getEffectiveSettings(fm: any) {
+    getEffectiveSettings(fm: Parameters<typeof parseFormulasFrontMatter>[0]): ParsedFormulasFrontMatter {
         return parseFormulasFrontMatter(fm, this.plugin.settings.myFormulas);
     }
 
-    updateNumbering(force: boolean = false, performRestore: boolean = true): boolean {
-        const info = this.getActiveViewInfo();
-        if (!info) return false;
-
-        const { data, editor } = info;
-        const settings = this.getEffectiveSettings(data.frontmatter);
-
-        if (!settings.enabled && !force) return false;
-
-        const cursorBefore = editor.getCursor();
-        const scrollBefore = editor.getScrollInfo();
-
-        const lineCount = editor.lineCount();
-        const codeRanges = getCodeBlockRanges(data);
-        const changes: any[] = [];
-
-        let equationCounter = 1;
-        const headingFormulaCounters: Record<string, number> = {};
-
-        // 1. Scan for $$ positions
-        const dollarPositions: { line: number, ch: number }[] = [];
-        for (let i = 0; i < lineCount; i++) {
-            const line = editor.getLine(i);
-            if (isLineIgnored(i, line, codeRanges)) continue;
-
-            let pos = -1;
-            while ((pos = line.indexOf('$$', pos + 1)) !== -1) {
-                dollarPositions.push({ line: i, ch: pos });
-            }
-        }
-
-        if (dollarPositions.length === 0) return false;
-
-        // 2. Process Pairs
-        for (let i = 0; i < dollarPositions.length - 1; i += 2) {
-            const start = dollarPositions[i];
-            const end = dollarPositions[i + 1];
-
-            // Validate Range (simple check)
-            if (start.line > end.line || (start.line === end.line && start.ch >= end.ch)) continue;
-
-            let formulaContent = '';
-            if (start.line === end.line) {
-                const line = editor.getLine(start.line);
-                formulaContent = line.substring(start.ch, end.ch + 2);
-            } else {
-                const startLine = editor.getLine(start.line);
-                formulaContent += startLine.substring(start.ch) + '\n';
-                for (let lineNum = start.line + 1; lineNum < end.line; lineNum++) {
-                    formulaContent += editor.getLine(lineNum) + '\n';
-                }
-                const endLine = editor.getLine(end.line);
-                formulaContent += endLine.substring(0, end.ch + 2);
-            }
-
-            const tagRegex = TAG_REGEX;
-            const hasTag = formulaContent.match(tagRegex);
-
-            let equationNumber = '';
-
-            if (settings.mode === 'heading-based') {
-                // Decoupled Logic: Read existing numbering from text
-                let currentHeadingNumber = '';
-                const headings = data.headings || [];
-                const maxDepth = settings.maxDepth || 4;
-
-                let searchIndex = -1;
-                // Find nearest preceding heading physically
-                for (let j = headings.length - 1; j >= 0; j--) {
-                    if (headings[j].position.start.line <= start.line) {
-                        searchIndex = j;
-                        break;
-                    }
-                }
-
-                // If found, ensure it or its parent satisfies depth limit
-                let targetHeading = null;
-                if (searchIndex !== -1) {
-                    for (let k = searchIndex; k >= 0; k--) {
-                        if (headings[k].level <= maxDepth) {
-                            targetHeading = headings[k];
-                            break;
-                        }
-                    }
-                }
-
-                if (targetHeading) {
-                    const headingLine = editor.getLine(targetHeading.position.start.line);
-                    // Decoupled Regex: Extract whatever number is there (1.1, A, 1-1, etc.)
-                    const numberExtractRegex = HEADING_NUMBER_REGEX;
-                    const match = headingLine.match(numberExtractRegex);
-
-                    if (match && match[1]) {
-                        currentHeadingNumber = match[1].trim();
-                        // Strip trailing separators
-                        if (['.', ':', '—', '-'].some(c => currentHeadingNumber.endsWith(c))) {
-                            currentHeadingNumber = currentHeadingNumber.slice(0, -1);
-                        }
-                    }
-                }
-
-                if (currentHeadingNumber) {
-                    if (!headingFormulaCounters[currentHeadingNumber]) headingFormulaCounters[currentHeadingNumber] = 1;
-                    equationNumber = `${currentHeadingNumber}-${headingFormulaCounters[currentHeadingNumber]}`;
-                    headingFormulaCounters[currentHeadingNumber]++;
-                } else {
-                    // Fallback to simple counter if no heading found or parsed
-                    equationNumber = `${equationCounter}`;
-                    equationCounter++;
-                }
-
-            } else {
-                // Continuous
-                equationNumber = `${equationCounter}`;
-                equationCounter++;
-            }
-
-            // Update Text
-            if (!hasTag) {
-                // Insert \tag at end before $$
-                const endLine = editor.getLine(end.line);
-                const beforeDollars = endLine.substring(0, end.ch);
-                const afterDollars = endLine.substring(end.ch);
-                const newLine = beforeDollars + ` \\tag{${equationNumber}}` + afterDollars;
-
-                changes.push({
-                    from: { line: end.line, ch: 0 },
-                    to: { line: end.line, ch: endLine.length },
-                    text: newLine
-                });
-            } else {
-                // Replace Existing
-                const updatedContent = formulaContent.replace(tagRegex, `\\tag{${equationNumber}}`);
-                if (updatedContent !== formulaContent) {
-                    if (start.line === end.line) {
-                        const line = editor.getLine(start.line);
-                        changes.push({
-                            from: { line: start.line, ch: 0 },
-                            to: { line: start.line, ch: line.length },
-                            text: line.substring(0, start.ch) + updatedContent + line.substring(end.ch + 2)
-                        });
-                    } else {
-                        changes.push({
-                            from: { line: start.line, ch: start.ch },
-                            to: { line: end.line, ch: end.ch + 2 },
-                            text: updatedContent
-                        });
-                    }
-                }
-            }
-        }
-
-        if (changes.length > 0) {
-            editor.transaction({ changes });
-            if (performRestore) {
-                restoreCursor(editor, cursorBefore);
-                editor.scrollTo(scrollBefore.left, scrollBefore.top);
-            }
-            return true;
-        }
-        return false;
+    buildPlan(
+        file: TFile,
+        source: string,
+        parsed: ParsedFormulasFrontMatter,
+        headings: ParsedHeadingsFrontMatter,
+        intent: ReconcileIntent,
+    ): FormulaExecutionPlan | undefined {
+        if (!this.plugin.settings.myFormulas.enabled || parsed.policy === 'off' || parsed.policy === 'invalid') return undefined;
+        if (parsed.settings.mode === 'heading-based' && headings.policy === 'invalid') return undefined;
+        const records = this.plugin.getOwnershipRecords('formulas', file.path);
+        return {
+            ...planFormulaReconcile(source, parsed.settings, headings.settings, intent, records),
+            filePath: file.path,
+            source,
+        };
     }
 
-    removeNumbering() {
-        const info = this.getActiveViewInfo();
-        if (!info) return;
-        const { editor } = info;
+    async commitPlan(plan: FormulaExecutionPlan): Promise<void> {
+        await this.plugin.setOwnershipRecords('formulas', plan.filePath, plan.records);
+    }
 
-        const changes: any[] = [];
-
-        const lineCount = editor.lineCount();
-        const tagRegex = TAG_REMOVE_REGEX;
-
-        const dollarPositions: { line: number, ch: number }[] = [];
-        for (let i = 0; i < lineCount; i++) {
-            const line = editor.getLine(i);
-            let pos = -1;
-            while ((pos = line.indexOf('$$', pos + 1)) !== -1) {
-                dollarPositions.push({ line: i, ch: pos });
-            }
+    async reconcileView(
+        view: MarkdownView,
+        parsed?: ParsedFormulasFrontMatter,
+        headings?: ParsedHeadingsFrontMatter,
+        explicitIntent?: ReconcileIntent,
+    ): Promise<FormulaRunResult> {
+        if (!this.plugin.settings.myFormulas.enabled || !view.file) {
+            return { changed: false, ambiguousLines: [], skipped: true };
+        }
+        const fm = this.app.metadataCache.getFileCache(view.file)?.frontmatter;
+        const resolved = parsed ?? this.getEffectiveSettings(fm);
+        const headingSettings = headings ?? parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings);
+        const intent = resolveReconcileIntent(this.plugin.settings.myFormulas.enabled, resolved.policy, explicitIntent);
+        if (!intent) {
+            return { changed: false, ambiguousLines: [], skipped: true };
         }
 
-        if (dollarPositions.length === 0) return;
-
-        for (let i = 0; i < dollarPositions.length - 1; i += 2) {
-            const start = dollarPositions[i];
-            const end = dollarPositions[i + 1];
-
-            if (start.line === end.line) {
-                const line = editor.getLine(start.line);
-                const content = line.substring(start.ch + 2, end.ch);
-                if (tagRegex.test(content)) {
-                    const newContent = content.replace(tagRegex, '');
-                    changes.push({
-                        from: { line: start.line, ch: start.ch + 2 },
-                        to: { line: end.line, ch: end.ch },
-                        text: newContent
-                    });
-                }
-            } else {
-                for (let j = start.line; j <= end.line; j++) {
-                    const line = editor.getLine(j);
-                    let s = 0, e = line.length;
-                    if (j === start.line) s = start.ch + 2;
-                    if (j === end.line) e = end.ch;
-
-                    const c = line.substring(s, e);
-                    if (tagRegex.test(c)) {
-                        const n = c.replace(tagRegex, '');
-                        changes.push({
-                            from: { line: j, ch: s },
-                            to: { line: j, ch: e },
-                            text: n
-                        });
-                    }
-                }
-            }
+        const source = view.editor.getValue();
+        const plan = this.buildPlan(view.file, source, resolved, headingSettings, intent);
+        if (!plan) return { changed: false, ambiguousLines: [], skipped: true };
+        if (view.file.path !== plan.filePath || view.editor.getValue() !== source) {
+            return { changed: false, ambiguousLines: plan.ambiguousLines, skipped: true };
         }
+        const changed = applyEditorEdits(view.editor, source, plan.edits);
+        if (plan.edits.length === 0 || changed) await this.commitPlan(plan);
+        return { changed, ambiguousLines: plan.ambiguousLines, skipped: false };
+    }
 
-        if (changes.length > 0) {
-            editor.transaction({ changes });
-        }
+    async applySettingsToFile(file: TFile, settings: MyFormulasSettings, intent: ReconcileIntent): Promise<FormulaRunResult> {
+        if (!this.plugin.settings.myFormulas.enabled) return { changed: false, ambiguousLines: [], skipped: true };
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file || view.file.path !== file.path) return { changed: false, ambiguousLines: [], skipped: true };
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        const parsed: ParsedFormulasFrontMatter = {
+            policy: intent === 'clear' ? 'none' : 'manual',
+            settings,
+            errors: [],
+            inherited: false,
+        };
+        return this.reconcileView(
+            view,
+            parsed,
+            parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings),
+            intent,
+        );
+    }
+
+    openAmbiguousCleanup(file: TFile, settings: MyFormulasSettings): boolean {
+        if (!this.plugin.settings.myFormulas.enabled) return false;
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file || view.file.path !== file.path) return false;
+        const source = view.editor.getValue();
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        const parsed: ParsedFormulasFrontMatter = {
+            policy: 'none',
+            settings,
+            errors: [],
+            inherited: false,
+        };
+        const headings = parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings);
+        const plan = this.buildPlan(file, source, parsed, headings, 'clear');
+        if (!plan || plan.ambiguousCandidates.length === 0) return false;
+        new AmbiguousCleanupModal(this.app, file, source, plan.ambiguousCandidates).open();
+        return true;
     }
 }

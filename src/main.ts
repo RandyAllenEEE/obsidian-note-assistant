@@ -1,5 +1,10 @@
 import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { NoteAssistantSettings, DEFAULT_SETTINGS } from './settings';
+import {
+    ManagedNumberRecord,
+    normalizeSettings,
+    NoteAssistantSettings,
+    NumberingModule,
+} from './settings';
 import { t } from './i18n/helpers';
 
 import { HeadingsManager } from './headings/manager';
@@ -13,10 +18,11 @@ export default class NoteAssistantPlugin extends Plugin {
     headingsManager: HeadingsManager;
     formulasManager: FormulasManager;
     autoNumberingController: AutoNumberingController;
+    private saveQueue: Promise<void> = Promise.resolve();
 
     async onload() {
-        console.log(t('Loading Note Assistant...'));
-        console.log(t('Loading Settings...'));
+        console.log('Loading Note Assistant...');
+        console.log('Loading Settings...');
         await this.loadSettings();
 
         // Initialize Managers
@@ -26,21 +32,24 @@ export default class NoteAssistantPlugin extends Plugin {
         // Initialize Auto Controller
         this.autoNumberingController = new AutoNumberingController(this.app, this, this.headingsManager, this.formulasManager);
 
-        // Load modules if enabled
-        if (this.settings.myHeadings.enabled) await this.headingsManager.onload();
-        if (this.settings.myFormulas.enabled) await this.formulasManager.onload();
+        // Managers and listeners are registered once. Runtime gates enforce module switches.
+        await this.headingsManager.onload();
+        await this.formulasManager.onload();
+        this.autoNumberingController.onload();
 
-        // Load Auto Controller if either relevant module is enabled
-        if (this.settings.myHeadings.enabled || this.settings.myFormulas.enabled) {
-            this.autoNumberingController.onload();
-        }
+        this.registerEvent(this.app.vault.on('rename', async (file, oldPath) => {
+            await this.moveOwnership(oldPath, file.path);
+        }));
+        this.registerEvent(this.app.vault.on('delete', async file => {
+            await this.removeOwnership(file.path);
+        }));
 
         // --- Centralized Command Registration ---
 
         // Headings
         this.addCommand({
             id: 'configure-headings',
-            name: t('Configure Headings'),
+            name: t('command.configureHeadings'),
             callback: () => {
                 if (this.settings.myHeadings.enabled) this.headingsManager.openControlModal();
             },
@@ -49,7 +58,7 @@ export default class NoteAssistantPlugin extends Plugin {
         // Formulas
         this.addCommand({
             id: 'configure-formulas',
-            name: t('Configure Formulas'),
+            name: t('command.configureFormulas'),
             callback: () => {
                 if (this.settings.myFormulas.enabled) this.formulasManager.openControlModal();
             },
@@ -59,42 +68,62 @@ export default class NoteAssistantPlugin extends Plugin {
     }
 
     onunload() {
-        console.log(t('Unloading Note Assistant...'));
+        console.log('Unloading Note Assistant...');
         this.headingsManager?.onunload();
         this.formulasManager?.onunload();
         this.autoNumberingController?.onunload();
     }
 
     async loadSettings() {
-        const loadedData = await this.loadData();
-
-        // 1. Initial Assign for top-level keys
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
-
-        // 2. Deep Merge for all modules
-        // Headings (includes Shifter)
-        if (loadedData?.myHeadings) {
-            this.settings.myHeadings = Object.assign({}, DEFAULT_SETTINGS.myHeadings, loadedData.myHeadings);
-            // Even deeper if needed (e.g. styleToRemove)
-            if (loadedData.myHeadings.styleToRemove) {
-                this.settings.myHeadings.styleToRemove = {
-                    beginning: Object.assign({}, DEFAULT_SETTINGS.myHeadings.styleToRemove.beginning, loadedData.myHeadings.styleToRemove.beginning),
-                    surrounding: Object.assign({}, DEFAULT_SETTINGS.myHeadings.styleToRemove.surrounding, loadedData.myHeadings.styleToRemove.surrounding),
-                };
-            }
+        this.settings = normalizeSettings(await this.loadData());
+        try {
+            await this.saveSettings();
+        } catch (error) {
+            console.error('Note Assistant could not persist normalized settings', error);
         }
-
-        // Formulas
-        if (loadedData?.myFormulas) {
-            this.settings.myFormulas = Object.assign({}, DEFAULT_SETTINGS.myFormulas, loadedData.myFormulas);
-        }
-
-        // Save cleaned settings to disk immediately
-        await this.saveSettings();
     }
 
     async saveSettings() {
-        await this.saveData(this.settings);
+        this.saveQueue = this.saveQueue.catch(() => undefined).then(() => this.saveData(this.settings));
+        await this.saveQueue;
+    }
+
+    getOwnershipRecords(module: NumberingModule, filePath: string): ManagedNumberRecord[] {
+        return [...(this.settings.ownership[module][filePath] ?? [])];
+    }
+
+    async setOwnershipRecords(module: NumberingModule, filePath: string, records: ManagedNumberRecord[]): Promise<void> {
+        const current = this.settings.ownership[module][filePath] ?? [];
+        if (JSON.stringify(current) === JSON.stringify(records)) return;
+        if (records.length === 0) delete this.settings.ownership[module][filePath];
+        else this.settings.ownership[module][filePath] = records;
+        await this.saveSettings();
+    }
+
+    private async moveOwnership(oldPath: string, newPath: string): Promise<void> {
+        let changed = false;
+        for (const module of ['headings', 'formulas'] as NumberingModule[]) {
+            for (const path of Object.keys(this.settings.ownership[module])) {
+                if (path !== oldPath && !path.startsWith(`${oldPath}/`)) continue;
+                const destination = `${newPath}${path.slice(oldPath.length)}`;
+                this.settings.ownership[module][destination] = this.settings.ownership[module][path];
+                delete this.settings.ownership[module][path];
+                changed = true;
+            }
+        }
+        if (changed) await this.saveSettings();
+    }
+
+    private async removeOwnership(path: string): Promise<void> {
+        let changed = false;
+        for (const module of ['headings', 'formulas'] as NumberingModule[]) {
+            for (const ownedPath of Object.keys(this.settings.ownership[module])) {
+                if (ownedPath !== path && !ownedPath.startsWith(`${path}/`)) continue;
+                delete this.settings.ownership[module][ownedPath];
+                changed = true;
+            }
+        }
+        if (changed) await this.saveSettings();
     }
 }
 
@@ -106,29 +135,18 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         this.plugin = plugin;
     }
 
-    private refreshAutoNumberingController() {
-        const anyActive = this.plugin.settings.myHeadings.enabled || this.plugin.settings.myFormulas.enabled;
-
-        // Always unload to clear potential old listeners/state
-        this.plugin.autoNumberingController.onunload();
-
-        if (anyActive) {
-            this.plugin.autoNumberingController.onload();
-        }
-    }
-
     display(): void {
         const { containerEl } = this;
 
         containerEl.empty();
-        containerEl.createEl('h2', { text: t('Note Assistant Settings') });
+        containerEl.createEl('h2', { text: t('settings.title') });
 
         // Global Settings Section
-        containerEl.createEl('h3', { text: t('Global Settings') });
+        containerEl.createEl('h3', { text: t('settings.global') });
 
         new Setting(containerEl)
-            .setName(t('Auto-Numbering Refresh Interval'))
-            .setDesc(t('Time in milliseconds to wait before auto-numbering triggers (after losing focus)'))
+            .setName(t('settings.refreshInterval'))
+            .setDesc(t('settings.refreshIntervalDescription'))
             .addText(text => text
                 .setPlaceholder('1000')
                 .setValue(String(this.plugin.settings.refreshInterval))
@@ -141,26 +159,20 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
                 }));
 
         containerEl.createEl('br');
-        containerEl.createEl('h3', { text: t('Modules') });
+        containerEl.createEl('h3', { text: t('settings.modules') });
 
 
         // MyHeadings Section
         this.addPluginSection(
             containerEl,
-            t('My Headings'),
+            t('module.headings'),
             this.plugin.settings.myHeadings.enabled,
             async (value) => {
                 this.plugin.settings.myHeadings.enabled = value;
                 await this.plugin.saveSettings();
 
-                // Reload logic for Headings + Auto Controller
-                if (value) {
-                    await this.plugin.headingsManager.onload();
-                } else {
-                    this.plugin.headingsManager.onunload();
-                }
-
-                this.refreshAutoNumberingController();
+                this.plugin.autoNumberingController.settingsChanged();
+                this.display();
             },
             (el) => {
                 renderHeadingsSettings(el, this.plugin.headingsManager);
@@ -170,19 +182,14 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         // MyFormulas Section
         this.addPluginSection(
             containerEl,
-            t('My Formulas'),
+            t('module.formulas'),
             this.plugin.settings.myFormulas.enabled,
             async (value) => {
                 this.plugin.settings.myFormulas.enabled = value;
                 await this.plugin.saveSettings();
 
-                if (value) {
-                    await this.plugin.formulasManager.onload();
-                } else {
-                    this.plugin.formulasManager.onunload();
-                }
-
-                this.refreshAutoNumberingController();
+                this.plugin.autoNumberingController.settingsChanged();
+                this.display();
             },
             (el) => {
                 renderFormulasSettings(el, this.plugin.formulasManager);
@@ -239,7 +246,7 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         if (isEnabled) {
             renderBody(content);
         } else {
-            content.createEl('i', { text: t('Module is disabled.') });
+            content.createEl('i', { text: t('settings.moduleDisabled') });
         }
     }
 }

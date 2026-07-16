@@ -1,190 +1,218 @@
-import { App, Modal, Setting, TFile, Notice } from 'obsidian';
+import { App, Modal, Notice, Setting, TFile } from 'obsidian';
 import NoteAssistantPlugin from '../main';
 import { t } from '../i18n/helpers';
-import { parseHeadingsFrontMatter, saveSettingsToFrontMatter } from '../utils/frontmatter';
+import { formatFrontMatterDiagnostics, formatSaveError } from '../i18n/diagnostics';
+import {
+    FileNumberingPolicy,
+    FrontMatterDiagnostic,
+    parseHeadingsFrontMatter,
+    saveSettingsToFrontMatter,
+} from '../utils/frontmatter';
 import { MyHeadingsSettings } from '../settings';
-import { DEFAULT_HEADING_STYLES, DEFAULT_HEADING_SEPARATORS, DEFAULT_HEADING_START_VALUES } from './manager';
+import { DEFAULT_HEADING_SEPARATORS, DEFAULT_HEADING_START_VALUES, DEFAULT_HEADING_STYLES } from './manager';
+
+type EditablePolicy = Exclude<FileNumberingPolicy, 'invalid'>;
 
 export class HeadingsControlModal extends Modal {
-    plugin: NoteAssistantPlugin;
-    file: TFile;
-    settings: MyHeadingsSettings;
+    private readonly plugin: NoteAssistantPlugin;
+    private readonly file: TFile;
+    private settings: MyHeadingsSettings;
+    private policy: EditablePolicy;
+    private parseErrors: FrontMatterDiagnostic[];
+    private unsupportedTokens: string[];
+    private rawValue?: string;
+    private originalSettings: string;
 
     constructor(app: App, plugin: NoteAssistantPlugin, file: TFile) {
         super(app);
         this.plugin = plugin;
         this.file = file;
-        // Clone current effective settings
-        const cache = app.metadataCache.getFileCache(file);
-        const fm = cache ? cache.frontmatter : undefined;
-        this.settings = JSON.parse(JSON.stringify(parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings)));
+        const parsed = parseHeadingsFrontMatter(app.metadataCache.getFileCache(file)?.frontmatter, plugin.settings.myHeadings);
+        this.settings = parsed.settings;
+        this.policy = parsed.policy === 'invalid' ? 'off' : parsed.policy;
+        this.parseErrors = parsed.errors;
+        this.unsupportedTokens = parsed.unsupportedTokens ?? [];
+        this.rawValue = parsed.rawValue;
+        this.originalSettings = this.settingsSignature();
     }
 
-    onOpen() {
+    onOpen(): void {
+        this.display();
+    }
+
+    private display(): void {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h2', { text: t('Configure Headings') });
-
-        // Auto Toggle
-        new Setting(contentEl)
-            .setName(t('Auto Number Headings'))
-            .setDesc(t('Automatically number headings on blur'))
-            .addToggle(toggle => toggle
-                .setValue(this.settings.auto)
-                .onChange(v => this.settings.auto = v));
-
-        // First / Max Level
-        new Setting(contentEl)
-            .setName(t('First Level'))
-            .setDesc(t('Starting heading level for numbering'))
-            .addSlider(slider => slider
-                .setLimits(1, 6, 1)
-                .setValue(this.settings.firstLevel)
-                .setDynamicTooltip()
-                .onChange(v => this.settings.firstLevel = v));
-
-        new Setting(contentEl)
-            .setName(t('Max Level'))
-            .setDesc(t('Maximum heading level for numbering'))
-            .addSlider(slider => slider
-                .setLimits(1, 6, 1)
-                .setValue(this.settings.maxLevel)
-                .setDynamicTooltip()
-                .onChange(v => this.settings.maxLevel = v));
-
-        // Heading Styles
-        const stylesSetting = new Setting(contentEl)
-            .setName(t('Heading Styles'))
-            .setDesc(t('Numbering style for each level (1-6)'))
-            .setClass('heading-styles-setting');
-
-        const stylesContainer = createDiv({ cls: 'heading-styles-container' });
-        stylesSetting.settingEl.appendChild(stylesContainer);
-
-        const styleOptions = ['1', 'a', 'A', '一', '①'];
-        for (let i = 0; i < 6; i++) {
-            const wrapper = stylesContainer.createDiv({ cls: 'style-item' });
-            wrapper.createEl('label', { text: `H${i + 1}: ` });
-            const select = wrapper.createEl('select');
-            styleOptions.forEach(option => {
-                select.createEl('option', { text: option, value: option });
-            });
-            select.value = this.settings.headingStyles?.[i] || DEFAULT_HEADING_STYLES[i];
-            select.onchange = () => {
-                if (!this.settings.headingStyles) this.settings.headingStyles = [...DEFAULT_HEADING_STYLES];
-                this.settings.headingStyles[i] = select.value;
-            };
+        contentEl.createEl('h2', { text: t('command.configureHeadings') });
+        if (this.parseErrors.length > 0) {
+            contentEl.createEl('p', { text: formatFrontMatterDiagnostics(this.parseErrors), cls: 'mod-warning' });
         }
 
-        // Heading Separators
-        const separatorsSetting = new Setting(contentEl)
-            .setName(t('Heading Separators'))
-            .setDesc(t('Separator after each level (empty for H1, then 2-6)'))
-            .setClass('heading-separators-setting');
+        new Setting(contentEl)
+            .setName(t('numbering.behavior'))
+            .setDesc(t('numbering.behaviorDescription'))
+            .addDropdown(dropdown => dropdown
+                .addOption('manual', t('numbering.manual'))
+                .addOption('auto', t('numbering.auto'))
+                .addOption('none', t('numbering.none'))
+                .addOption('off', t('numbering.off'))
+                .setValue(this.policy)
+                .onChange(value => {
+                    this.policy = value as EditablePolicy;
+                    this.settings.auto = this.policy === 'auto';
+                    this.display();
+                }));
 
-        const separatorsContainer = createDiv({ cls: 'heading-separators-container' });
-        separatorsSetting.settingEl.appendChild(separatorsContainer);
+        if (this.policy === 'manual' || this.policy === 'auto') this.renderNumberingSettings(contentEl);
+        else contentEl.createEl('p', {
+            text: this.policy === 'none'
+                ? t('numbering.headingNoneDescription')
+                : t('numbering.headingOffDescription'),
+        });
 
-        for (let i = 1; i < 6; i++) {
-            const wrapper = separatorsContainer.createDiv({ cls: 'separator-item' });
-            wrapper.createEl('label', { text: `H${i + 1}: ` });
-            const input = wrapper.createEl('input', { type: 'text' });
-            input.value = this.settings.headingSeparators?.[i] || DEFAULT_HEADING_SEPARATORS[i];
-            input.maxLength = 1;
-            input.style.width = '2em';
-            input.oninput = () => {
-                if (!this.settings.headingSeparators) this.settings.headingSeparators = [...DEFAULT_HEADING_SEPARATORS];
-                this.settings.headingSeparators[i] = input.value || '';
-            };
-        }
-
-        // Heading Start Values
-        const startValuesSetting = new Setting(contentEl)
-            .setName(t('Start Values'))
-            .setDesc(t('Starting number for each level'))
-            .setClass('heading-start-values-setting');
-
-        const startValuesContainer = createDiv({ cls: 'heading-start-values-container' });
-        startValuesSetting.settingEl.appendChild(startValuesContainer);
-
-        for (let i = 0; i < 6; i++) {
-            const wrapper = startValuesContainer.createDiv({ cls: 'start-value-item' });
-            wrapper.createEl('label', { text: `H${i + 1}: ` });
-            const input = wrapper.createEl('input', { type: 'text' });
-            input.value = this.settings.headingStartValues?.[i] || DEFAULT_HEADING_START_VALUES[i];
-            input.maxLength = 1;
-            input.style.width = '2em';
-            input.oninput = () => {
-                if (!this.settings.headingStartValues) this.settings.headingStartValues = [...DEFAULT_HEADING_START_VALUES];
-                this.settings.headingStartValues[i] = input.value || '1';
-            };
-        }
-
-        // Action Buttons
         const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
-
         new Setting(buttonContainer)
-            .addButton(btn => btn
-                .setButtonText(t('Apply Now'))
-                .setTooltip(t('Apply numbering once without saving to frontmatter'))
-                .onClick(() => {
-                    this.applyNumbering();
+            .addButton(button => button
+                .setButtonText(t('numbering.applyNow'))
+                .setTooltip(t('numbering.applyNowTooltip'))
+                .onClick(async () => {
+                    await this.applyCurrentPolicy();
                     this.close();
                 }))
-            .addButton(btn => btn
-                .setButtonText(t('Save to Frontmatter'))
-                .setTooltip(t('Save settings to frontmatter and apply'))
+            .addButton(button => button
+                .setButtonText(t('numbering.saveToFrontmatter'))
+                .setTooltip(t('numbering.saveTooltip'))
                 .setCta()
                 .onClick(async () => {
-                    await this.saveAndApply();
-                    this.close();
+                    if (await this.saveAndApply()) this.close();
                 }))
-            .addButton(btn => btn
-                .setButtonText(t('Remove Numbering'))
+            .addButton(button => button
+                .setButtonText(t('numbering.remove'))
                 .setWarning()
-                .onClick(() => {
-                    this.plugin.headingsManager.removeNumbering();
-                    new Notice(t('Heading numbering removed'));
+                .onClick(async () => {
+                    const result = await this.plugin.headingsManager.applySettingsToFile(this.file, this.settings, 'clear');
+                    if (result.skipped) new Notice(t('notice.targetInactive'));
+                    else {
+                        new Notice(t('notice.headingRemoved'));
+                        this.plugin.headingsManager.openAmbiguousCleanup(this.file, this.settings);
+                    }
                     this.close();
                 }));
     }
 
-    applyNumbering() {
-        // Temporarily override effective settings by directly calling with custom settings
-        const info = this.plugin.headingsManager.getActiveViewInfo();
-        if (!info) return;
+    private renderNumberingSettings(contentEl: HTMLElement): void {
+        new Setting(contentEl)
+            .setName(t('headings.firstLevel'))
+            .setDesc(t('headings.firstLevelDescription'))
+            .addSlider(slider => slider.setLimits(1, 6, 1).setValue(this.settings.firstLevel).setDynamicTooltip().onChange(value => {
+                this.settings.firstLevel = value;
+                if (this.settings.maxLevel < value) this.settings.maxLevel = value;
+            }));
 
-        const { data, editor } = info;
+        new Setting(contentEl)
+            .setName(t('headings.maxLevel'))
+            .setDesc(t('headings.maxLevelDescription'))
+            .addSlider(slider => slider.setLimits(1, 6, 1).setValue(this.settings.maxLevel).setDynamicTooltip().onChange(value => {
+                this.settings.maxLevel = value;
+                if (this.settings.firstLevel > value) this.settings.firstLevel = value;
+            }));
 
-        // Save original settings
-        const originalSettings = this.plugin.settings.myHeadings;
+        const stylesSetting = new Setting(contentEl)
+            .setName(t('headings.styles'))
+            .setDesc(`${t('headings.stylesDescription')} ${t('headings.stylesCaseNote')}`);
+        const stylesContainer = createDiv({ cls: 'heading-styles-container' });
+        stylesSetting.settingEl.appendChild(stylesContainer);
+        const styleOptions = ['1', 'a', 'A', 'I', '一', '①'];
+        for (let i = 0; i < 6; i++) {
+            const wrapper = stylesContainer.createDiv({ cls: 'style-item' });
+            wrapper.createEl('label', { text: `H${i + 1}: ` });
+            const select = wrapper.createEl('select');
+            styleOptions.forEach(option => select.createEl('option', { text: option, value: option }));
+            const currentStyle = styleOptions.includes(this.settings.headingStyles[i]) ? this.settings.headingStyles[i] : DEFAULT_HEADING_STYLES[i];
+            this.settings.headingStyles[i] = currentStyle;
+            select.value = currentStyle;
+            select.onchange = () => this.settings.headingStyles[i] = select.value;
+        }
 
-        // Temporarily replace with modal settings
-        this.plugin.settings.myHeadings = this.settings;
+        const separatorsSetting = new Setting(contentEl)
+            .setName(t('headings.separators'))
+            .setDesc(t('headings.compactSeparatorsDescription'));
+        const separatorsContainer = createDiv({ cls: 'heading-separators-container' });
+        separatorsSetting.settingEl.appendChild(separatorsContainer);
+        for (let i = 1; i < 6; i++) {
+            const wrapper = separatorsContainer.createDiv({ cls: 'separator-item' });
+            wrapper.createEl('label', { text: `H${i + 1}: ` });
+            const select = wrapper.createEl('select');
+            const separatorOptions = ['.', '-', ':', '—'];
+            separatorOptions.forEach(option => select.createEl('option', { text: option, value: option }));
+            const currentSeparator = separatorOptions.includes(this.settings.headingSeparators[i])
+                ? this.settings.headingSeparators[i]
+                : DEFAULT_HEADING_SEPARATORS[i];
+            this.settings.headingSeparators[i] = currentSeparator;
+            select.value = currentSeparator;
+            select.onchange = () => this.settings.headingSeparators[i] = select.value;
+        }
 
-        // Apply numbering
-        this.plugin.headingsManager.updateNumbering(true, true);
-
-        // Restore original settings
-        this.plugin.settings.myHeadings = originalSettings;
-
-        new Notice(t('Numbering applied (one-time)'));
+        const startsSetting = new Setting(contentEl)
+            .setName(t('headings.startValues'))
+            .setDesc(t('headings.startValuesDescription'));
+        const startsContainer = createDiv({ cls: 'start-values-container' });
+        startsSetting.settingEl.appendChild(startsContainer);
+        for (let i = 0; i < 6; i++) {
+            const wrapper = startsContainer.createDiv({ cls: 'start-value-item' });
+            wrapper.createEl('label', { text: `H${i + 1}: ` });
+            const input = wrapper.createEl('input', { type: 'text' });
+            const currentStart = /^\d$/.test(this.settings.headingStartValues[i])
+                ? this.settings.headingStartValues[i]
+                : DEFAULT_HEADING_START_VALUES[i];
+            this.settings.headingStartValues[i] = currentStart;
+            input.value = currentStart;
+            input.maxLength = 1;
+            input.inputMode = 'numeric';
+            input.oninput = () => {
+                if (/^\d$/.test(input.value)) this.settings.headingStartValues[i] = input.value;
+            };
+        }
     }
 
-    async saveAndApply() {
-        await saveSettingsToFrontMatter(this.app, this.file, this.settings);
-
-        // Force cache refresh
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Apply with frontmatter settings
-        this.plugin.headingsManager.updateNumbering(true, true);
-
-        new Notice(t('Settings saved to frontmatter and applied'));
+    private async applyCurrentPolicy(): Promise<void> {
+        if (this.policy === 'off') {
+            new Notice(t('notice.headingUnchanged'));
+            return;
+        }
+        const intent = this.policy === 'none' ? 'clear' : 'number';
+        const result = await this.plugin.headingsManager.applySettingsToFile(this.file, this.settings, intent);
+        if (result.skipped) {
+            new Notice(t('notice.targetInactive'));
+            return;
+        }
+        if (intent === 'clear') this.plugin.headingsManager.openAmbiguousCleanup(this.file, this.settings);
+        new Notice(t('notice.behaviorApplied'));
     }
 
-    onClose() {
-        const { contentEl } = this;
-        contentEl.empty();
+    private async saveAndApply(): Promise<boolean> {
+        try {
+            await saveSettingsToFrontMatter(this.app, this.file, {
+                settings: this.settings,
+                policy: this.policy,
+                unsupportedTokens: this.unsupportedTokens,
+                rawValue: this.rawValue,
+                preserveTail: this.settingsSignature() === this.originalSettings,
+            });
+        } catch (error) {
+            new Notice(formatSaveError('notice.unableToSaveHeadings', error));
+            return false;
+        }
+        await this.applyCurrentPolicy();
+        new Notice(t('notice.settingsSaved'));
+        return true;
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
+    }
+
+    private settingsSignature(): string {
+        return JSON.stringify({ ...this.settings, enabled: true, auto: false });
     }
 }

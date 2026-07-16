@@ -15,12 +15,22 @@ export interface NumberingToken {
 const chineseNumbers = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 const circledNumbers = ['⓪', '①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
 
-function isValidArabicNumberingValueString(s: string): boolean {
-    return /^[0-9]+$/.test(s);
-}
-
-function isValidAlphabetNumberingValueString(s: string): boolean {
-    return /^[a-zA-Z]+$/.test(s);
+function toRoman(value: number): string {
+    if (!Number.isFinite(value) || value <= 0) return 'I';
+    const values: Array<[number, string]> = [
+        [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+        [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+        [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+    ];
+    let remaining = Math.floor(value);
+    let result = '';
+    for (const [amount, token] of values) {
+        while (remaining >= amount) {
+            result += token;
+            remaining -= amount;
+        }
+    }
+    return result;
 }
 
 export function zerothNumberingTokenInStyle(style: NumberingStyle, startValue: string): NumberingToken {
@@ -44,8 +54,8 @@ export function zerothNumberingTokenInStyle(style: NumberingStyle, startValue: s
 }
 
 export function firstNumberingTokenInStyle(style: NumberingStyle, startValue: string): NumberingToken {
-    const startNum = parseInt(startValue);
-    const isNumericStart = !isNaN(startNum);
+    const isNumericStart = /^\d+$/.test(startValue);
+    const startNum = isNumericStart ? Number(startValue) : 1;
 
     switch (style) {
         case '1':
@@ -64,6 +74,8 @@ export function firstNumberingTokenInStyle(style: NumberingStyle, startValue: st
                 return { style: 'a', value: 'a' };
             }
             return { style: 'a', value: startValue || 'a' };
+        case 'I':
+            return { style: 'I', value: isNumericStart && startNum > 0 ? startNum : 1 };
         case '一':
             if (isNumericStart) {
                 if (startNum >= 0 && startNum < chineseNumbers.length) {
@@ -100,6 +112,8 @@ export function nextNumberingToken(t: NumberingToken): NumberingToken {
             if (t.value === '&') return { style: 'a', value: 'a' };
             if (t.value === 'z') return { style: 'a', value: 'a' };
             return { style: 'a', value: String.fromCharCode(t.value.charCodeAt(0) + 1) };
+        case 'I':
+            return { style: 'I', value: Number(t.value) + 1 };
         case '一':
             const cnIndex = chineseNumbers.indexOf(t.value);
             if (cnIndex > -1 && cnIndex < chineseNumbers.length - 1) {
@@ -134,6 +148,8 @@ export function previousNumberingToken(t: NumberingToken): NumberingToken {
             if (t.value === 'a') return { style: 'a', value: '&' };
             if (t.value === '&') return { style: 'a', value: 'z' };
             else return { style: 'a', value: String.fromCharCode(t.value.charCodeAt(0) - 1) };
+        case 'I':
+            return { style: 'I', value: Math.max(1, Number(t.value) - 1) };
         case '一':
             const num = parseInt(t.value);
             if (!isNaN(num)) {
@@ -158,7 +174,8 @@ export function previousNumberingToken(t: NumberingToken): NumberingToken {
 
 function printableNumberingToken(t: NumberingToken): string {
     if (t.style === '1') return t.value.toString();
-    return t.value;
+    if (t.style === 'I') return toRoman(Number(t.value));
+    return String(t.value);
 }
 
 export function makeNumberingString(numberingStack: NumberingToken[], separators: string[]): string {
