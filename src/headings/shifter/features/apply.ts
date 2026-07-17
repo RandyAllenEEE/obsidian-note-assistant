@@ -126,7 +126,12 @@ export const createListIndentChangesByListBehavior = (
             ? // follow parent
             Math.max(0, parentIndentLevel)
             : // Force the next line of parent to be 0
-            -countIndentLevel(editor.getLine(parentLineNumber + 1), tabSize) +
+            -countIndentLevel(
+                parentLineNumber + 1 < editor.lineCount()
+                    ? editor.getLine(parentLineNumber + 1)
+                    : "",
+                tabSize,
+            ) +
             countIndentLevel(editor.getLine(parentLineNumber), tabSize);
 
     const indentChanges = createListIndentChanges(editor, {
@@ -141,7 +146,7 @@ export const createListIndentChangesByListBehavior = (
 // Operation Class
 import type { Command, Editor } from "obsidian";
 import { createRange } from "../utils/range";
-import { composeLineChanges } from "../utils/editorChange";
+import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
 import { t } from "../../../i18n/helpers";
 
 export class ApplyHeading {
@@ -159,9 +164,6 @@ export class ApplyHeading {
             editor.getCursor("to").line - editor.getCursor("from").line + 1,
         );
 
-        const isOneLine =
-            editor.getCursor("from").line === editor.getCursor("to").line;
-
         const lastHeaderLineNumber = lines[lines.length - 1] ?? 0;
 
         const headingsChanges = composeLineChanges(editor, lines, (chunk) =>
@@ -175,15 +177,7 @@ export class ApplyHeading {
             parentLineNumber: lastHeaderLineNumber,
         });
 
-        editor.transaction({
-            changes: [...headingsChanges, ...indentChanges],
-        });
-
-        // If only one line is targeted, move the cursor to the end of the line.
-        if (isOneLine) {
-            editor.setCursor(editor.getCursor("anchor").line);
-        }
-        return true;
+        return dispatchHeadingChanges(editor, [...headingsChanges, ...indentChanges]) === "applied";
     };
 
     createCommand = (): Command => {

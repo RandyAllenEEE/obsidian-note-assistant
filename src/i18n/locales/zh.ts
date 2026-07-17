@@ -118,6 +118,7 @@ const zh = {
     'notice.ambiguousPreservedMany': '已保留 {count} 个存疑的{module}编号。请使用“移除编号”进行检查。',
     'notice.cannotIncreasePastH6': '无法继续增加标题级别：最高为 H6。',
     'notice.cannotDecreasePastLimit': '无法继续减少标题级别：当前下限为 H{level}。',
+    'notice.headingEditCancelled': '标题编辑范围已失效，为避免错误修改，本次操作已取消。',
 
     'diagnostic.conflictingPolicies': '存在冲突的编号策略',
     'diagnostic.headingPropertyMustBeText': '标题编号属性必须是文本',

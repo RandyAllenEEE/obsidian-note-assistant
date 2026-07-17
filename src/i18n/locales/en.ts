@@ -116,6 +116,7 @@ const en = {
     'notice.ambiguousPreservedMany': '{count} ambiguous {module} numbers were preserved. Use Remove Numbering to review them.',
     'notice.cannotIncreasePastH6': 'Cannot increase heading level beyond Heading 6.',
     'notice.cannotDecreasePastLimit': 'Cannot decrease heading level beyond Heading {level}.',
+    'notice.headingEditCancelled': 'The heading edit was cancelled because its document range was no longer safe.',
 
     'diagnostic.conflictingPolicies': 'Conflicting numbering policies',
     'diagnostic.headingPropertyMustBeText': 'Heading numbering property must be text',

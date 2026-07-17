@@ -71,6 +71,36 @@ describe('formula reconcile', () => {
         expect(result).toContain('$$c \\tag{2-1}$$');
     });
 
+    it('updates an owned heading-based tag in place after a heading-level change', () => {
+        const formulaSettings = { ...DEFAULT_MY_FORMULAS_SETTINGS, mode: 'heading-based' as const, maxDepth: 4 };
+        const source = '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1}$$';
+        const record: ManagedNumberRecord = {
+            elementHash: fingerprintText('x'),
+            token: '\\tag{1.1-1}',
+            configSignature: 'old',
+            leadingSpace: true,
+        };
+        const plan = planFormulaReconcile(source, formulaSettings, headingSettings, 'number', [record]);
+        const updated = applyEditsToText(source, plan.edits);
+        expect(updated).toBe('# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1.1-1}$$');
+        expect(updated.match(/\\tag\{/g)).toHaveLength(1);
+        expect(planFormulaReconcile(updated, formulaSettings, headingSettings, 'number', plan.records).edits)
+            .toEqual([]);
+    });
+
+    it('preserves unowned or multiple tags after a heading-level change without adding another tag', () => {
+        const formulaSettings = { ...DEFAULT_MY_FORMULAS_SETTINGS, mode: 'heading-based' as const, maxDepth: 4 };
+        for (const source of [
+            '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1}$$',
+            '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1} \\tag{custom}$$',
+        ]) {
+            const plan = planFormulaReconcile(source, formulaSettings, headingSettings, 'number');
+            expect(plan.edits).toEqual([]);
+            expect(applyEditsToText(source, plan.edits)).toBe(source);
+            expect(plan.ambiguousLines).toEqual([3]);
+        }
+    });
+
     it('can merge heading and formula edits planned from the same immutable snapshot', () => {
         const source = '# First\n$$x$$';
         const headingPlan = planHeadingReconcile(source, headingSettings, 'number');

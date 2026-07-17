@@ -112,16 +112,24 @@ export function computeHeadingExpectations(source: string, settings: MyHeadingsS
     return headings;
 }
 
-function configuredPrefix(body: string, expectation: HeadingExpectation, settings: MyHeadingsSettings): { token: string; consumed: number } | undefined {
-    if (!expectation.expectedToken || expectation.componentStyles.length === 0) return undefined;
-    let pattern = tokenPattern(expectation.componentStyles[0]);
-    for (let i = 1; i < expectation.componentStyles.length; i++) {
-        pattern += `${escapeRegExp(settings.headingSeparators[i] || '')}${tokenPattern(expectation.componentStyles[i])}`;
+function configuredPrefix(body: string, settings: MyHeadingsSettings): { token: string; consumed: number } | undefined {
+    const styles: NumberingStyle[] = [];
+    const matches: Array<{ token: string; consumed: number }> = [];
+
+    for (let level = settings.firstLevel; level <= 6; level++) {
+        const styleIndex = Math.min(level - 1, settings.headingStyles.length - 1);
+        styles.push(supportedStyle(settings.headingStyles[styleIndex]));
+
+        let pattern = tokenPattern(styles[0]);
+        for (let index = 1; index < styles.length; index++) {
+            pattern += `${escapeRegExp(settings.headingSeparators[index] || '')}${tokenPattern(styles[index])}`;
+        }
+        pattern += escapeRegExp(settings.headingSeparators[0] || '');
+        const match = body.match(new RegExp(`^(${pattern})[ \\t]+`));
+        if (match) matches.push({ token: match[1], consumed: match[0].length });
     }
-    pattern += escapeRegExp(settings.headingSeparators[0] || '');
-    const match = body.match(new RegExp(`^(${pattern})[ \\t]+`));
-    if (!match) return undefined;
-    return { token: match[1], consumed: match[0].length };
+
+    return matches.sort((left, right) => right.consumed - left.consumed)[0];
 }
 
 function bodyHash(body: string): string {
@@ -132,14 +140,23 @@ function findUniqueOwnedMatches(
     expectations: HeadingExpectation[],
     records: ManagedNumberRecord[],
 ): Map<number, ManagedNumberRecord> {
-    const byLine = new Map<number, ManagedNumberRecord>();
+    const candidatesByLine = new Map<number, ManagedNumberRecord[]>();
     for (const record of records) {
-        if (record.level === undefined || !record.token) continue;
+        if (!record.token) continue;
         const matches = expectations.filter(expectation => {
-            if (expectation.level !== record.level || !expectation.body.startsWith(`${record.token} `)) return false;
+            if (!expectation.body.startsWith(`${record.token} `)) return false;
             return bodyHash(expectation.body.slice(record.token.length + 1)) === record.elementHash;
         });
-        if (matches.length === 1 && !byLine.has(matches[0].line)) byLine.set(matches[0].line, record);
+        if (matches.length !== 1) continue;
+        const line = matches[0].line;
+        const candidates = candidatesByLine.get(line) ?? [];
+        candidates.push(record);
+        candidatesByLine.set(line, candidates);
+    }
+
+    const byLine = new Map<number, ManagedNumberRecord>();
+    for (const [line, candidates] of candidatesByLine) {
+        if (candidates.length === 1) byLine.set(line, candidates[0]);
     }
     return byLine;
 }
@@ -147,7 +164,7 @@ function findUniqueOwnedMatches(
 function deduplicateRecords(records: ManagedNumberRecord[]): ManagedNumberRecord[] {
     const seen = new Set<string>();
     return records.filter(record => {
-        const key = `${record.level ?? ''}\u0000${record.elementHash}\u0000${record.token}`;
+        const key = `${record.elementHash}\u0000${record.token}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -162,7 +179,8 @@ export function planHeadingReconcile(
 ): HeadingReconcilePlan {
     const expectations = computeHeadingExpectations(source, settings);
     const signature = configSignature(settings);
-    const ownedByLine = findUniqueOwnedMatches(expectations, existingRecords);
+    const records = deduplicateRecords(existingRecords);
+    const ownedByLine = findUniqueOwnedMatches(expectations, records);
     const usedRecords = new Set<ManagedNumberRecord>();
     const nextRecords: ManagedNumberRecord[] = [];
     const ambiguousLines: number[] = [];
@@ -185,7 +203,7 @@ export function planHeadingReconcile(
                 });
                 continue;
             }
-            const ambiguous = configuredPrefix(expectation.body, expectation, settings);
+            const ambiguous = expected ? configuredPrefix(expectation.body, settings) : undefined;
             if (ambiguous) {
                 ambiguousLines.push(expectation.line + 1);
                 ambiguousCandidates.push({
@@ -235,7 +253,7 @@ export function planHeadingReconcile(
             });
             continue;
         }
-        const ambiguous = configuredPrefix(expectation.body, expectation, settings);
+        const ambiguous = configuredPrefix(expectation.body, settings);
         if (ambiguous) {
             ambiguousLines.push(expectation.line + 1);
             ambiguousCandidates.push({
@@ -259,13 +277,13 @@ export function planHeadingReconcile(
         });
     }
 
-    for (const record of existingRecords) {
+    for (const record of records) {
         if (!usedRecords.has(record)) nextRecords.push(record);
     }
 
     return {
         edits: normalizeEdits(source, edits),
-        records: intent === 'clear' ? existingRecords.filter(record => !usedRecords.has(record)) : deduplicateRecords(nextRecords),
+        records: intent === 'clear' ? records.filter(record => !usedRecords.has(record)) : deduplicateRecords(nextRecords),
         ambiguousLines,
         ambiguousCandidates,
         expectations,

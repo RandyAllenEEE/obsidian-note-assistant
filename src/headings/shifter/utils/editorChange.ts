@@ -1,6 +1,7 @@
 import { TABSIZE } from "./constants";
-import type { EditorChange, EditorPosition } from "obsidian";
+import { Notice, type Editor, type EditorChange, type EditorPosition } from "obsidian";
 import type { MyHeadingsSettings } from "../../../settings";
+import { t } from "../../../i18n/helpers";
 import { countIndentLevel, getListChildrenLines } from "./markdown";
 
 export type MinimumEditor = {
@@ -19,20 +20,136 @@ export const composeLineChanges = (
     const editorChange: EditorChange[] = [];
 
     for (const line of lineNumbers) {
-        const shifted = changeCallback(editor.getLine(line), settings);
+        if (!Number.isInteger(line) || line < 0 || line >= editor.lineCount()) {
+            editorChange.push({
+                text: "",
+                from: { line, ch: 0 },
+                to: { line, ch: 0 },
+            });
+            continue;
+        }
+        const current = editor.getLine(line);
+        const shifted = changeCallback(current, settings);
 
         editorChange.push({
             text: shifted,
             from: { line: line, ch: 0 },
             to: {
                 line: line,
-                ch: editor.getLine(line).length,
+                ch: current.length,
             },
         });
     }
 
     return editorChange;
 };
+
+export type HeadingChangeDispatchStatus = "applied" | "unchanged" | "rejected";
+
+type TransactionEditor = MinimumEditor & Pick<Editor, "transaction">;
+
+interface PreparedChange {
+    change: EditorChange;
+    fromOffset: number;
+    toOffset: number;
+}
+
+function validPosition(position: EditorPosition, lines: string[]): boolean {
+    return Number.isInteger(position.line)
+        && Number.isInteger(position.ch)
+        && position.line >= 0
+        && position.line < lines.length
+        && position.ch >= 0
+        && position.ch <= lines[position.line].length;
+}
+
+function prepareEditorChanges(
+    editor: TransactionEditor,
+    changes: EditorChange[],
+): EditorChange[] | undefined {
+    const lineCount = editor.lineCount();
+    if (!Number.isInteger(lineCount) || lineCount < 1) return changes.length === 0 ? [] : undefined;
+
+    const lines: string[] = [];
+    try {
+        for (let line = 0; line < lineCount; line++) lines.push(editor.getLine(line));
+    } catch {
+        return undefined;
+    }
+
+    const lineStarts: number[] = [];
+    let source = "";
+    for (let line = 0; line < lines.length; line++) {
+        if (line > 0) source += "\n";
+        lineStarts.push(source.length);
+        source += lines[line];
+    }
+
+    const positionToOffset = (position: EditorPosition): number =>
+        lineStarts[position.line] + position.ch;
+    const prepared: PreparedChange[] = [];
+    const seen = new Set<string>();
+
+    for (const change of changes) {
+        const to = change.to ?? change.from;
+        if (typeof change.text !== "string"
+            || !validPosition(change.from, lines)
+            || !validPosition(to, lines)) {
+            return undefined;
+        }
+
+        const fromOffset = positionToOffset(change.from);
+        const toOffset = positionToOffset(to);
+        if (toOffset < fromOffset) return undefined;
+        if (source.slice(fromOffset, toOffset) === change.text) continue;
+
+        const key = `${fromOffset}\u0000${toOffset}\u0000${change.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        prepared.push({
+            change: { text: change.text, from: change.from, to },
+            fromOffset,
+            toOffset,
+        });
+    }
+
+    prepared.sort((left, right) =>
+        left.fromOffset - right.fromOffset || left.toOffset - right.toOffset);
+
+    for (let index = 1; index < prepared.length; index++) {
+        const previous = prepared[index - 1];
+        const current = prepared[index];
+        const previousIsInsertion = previous.fromOffset === previous.toOffset;
+        const currentIsInsertion = current.fromOffset === current.toOffset;
+        const overlaps = current.fromOffset < previous.toOffset
+            || current.fromOffset === previous.fromOffset
+            || (current.fromOffset === previous.toOffset && (previousIsInsertion || currentIsInsertion));
+        if (overlaps) return undefined;
+    }
+
+    return prepared.map(item => item.change);
+}
+
+export function dispatchHeadingChanges(
+    editor: TransactionEditor,
+    changes: EditorChange[],
+): HeadingChangeDispatchStatus {
+    const prepared = prepareEditorChanges(editor, changes);
+    if (!prepared) {
+        new Notice(t("notice.headingEditCancelled"));
+        return "rejected";
+    }
+    if (prepared.length === 0) return "unchanged";
+
+    try {
+        editor.transaction({ changes: prepared });
+        return "applied";
+    } catch (error) {
+        console.error("Note Assistant rejected a heading edit transaction", error);
+        new Notice(t("notice.headingEditCancelled"));
+        return "rejected";
+    }
+}
 
 export const createListIndentChanges = (
     editor: MinimumEditor,

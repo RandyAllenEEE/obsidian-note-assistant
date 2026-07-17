@@ -1,7 +1,7 @@
 import { type Command, type Editor, Notice } from "obsidian";
 import type { MyHeadingsSettings } from "../../../settings";
 import { applyHeading, createListIndentChangesByListBehavior } from "./apply";
-import { composeLineChanges } from "../utils/editorChange";
+import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
 import { checkHeading, getPreviousHeading } from "../utils/markdown";
 import { t } from "../../../i18n/helpers";
 
@@ -34,12 +34,7 @@ export class InsertHeadingAtCurrentLevel {
             parentLineNumber: cursorLine,
         });
 
-        editor.transaction({
-            changes: [...headingChanges, ...indentChanges],
-        });
-
-        editor.setCursor(editor.getCursor().line);
-        return true;
+        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
     };
 
     createCommand = (): Command => {
@@ -64,7 +59,7 @@ export class InsertHeadingAtDeeperLevel {
 
         // current heading level == most recently added heading
         // 0 if no heading exists yet
-        const headingLevel = lastHeadingLine
+        const headingLevel = lastHeadingLine !== undefined
             ? checkHeading(editor.getLine(lastHeadingLine))
             : 0;
 
@@ -88,12 +83,7 @@ export class InsertHeadingAtDeeperLevel {
             parentLineNumber: cursorLine,
         });
 
-        editor.transaction({
-            changes: [...headingChanges, ...indentChanges],
-        });
-
-        editor.setCursor(editor.getCursor().line);
-        return true;
+        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
     };
 
     createCommand = (): Command => {
@@ -118,7 +108,7 @@ export class InsertHeadingAtHigherLevel {
 
         // current heading level == most recently added heading
         // 0 if no heading exists yet
-        const headingLevel = lastHeadingLine
+        const headingLevel = lastHeadingLine !== undefined
             ? checkHeading(editor.getLine(lastHeadingLine))
             : 0;
 
@@ -137,12 +127,7 @@ export class InsertHeadingAtHigherLevel {
             parentLineNumber: cursorLine,
         });
 
-        editor.transaction({
-            changes: [...headingChanges, ...indentChanges],
-        });
-
-        editor.setCursor(editor.getCursor().line);
-        return true;
+        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
     };
 
     createCommand = (): Command => {

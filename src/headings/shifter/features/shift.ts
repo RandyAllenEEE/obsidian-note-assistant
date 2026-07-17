@@ -1,6 +1,6 @@
 import { type Command, type Editor, Notice } from "obsidian";
 import type { MyHeadingsSettings } from "../../../settings";
-import { composeLineChanges } from "../utils/editorChange";
+import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
 import { getHeadingLines, checkHeading } from "../utils/markdown";
 import { applyHeading } from "./apply";
 import { t } from "../../../i18n/helpers";
@@ -57,27 +57,16 @@ export class IncreaseHeading {
             return true;
         }
 
-        const isOneLine =
-            editor.getCursor("from").line === editor.getCursor("to").line;
-
-        // Dispatch Transaction
         const editorChange = composeLineChanges(
             editor,
             headingLines,
             increaseHeading,
             this.settings,
         );
-        editor.transaction({
-            changes: editorChange,
-        });
+        const status = dispatchHeadingChanges(editor, editorChange);
 
         // Since SHIFT is for items that already have a HEADING, it does not do `execOutdent`.
-
-        // If only one line is targeted, move the cursor to the end of the line.
-        if (isOneLine) {
-            editor.setCursor(editor.getCursor("anchor").line);
-        }
-        return editorChange.length ? true : false;
+        return status === "applied";
     };
 
     createCommand = (): Command => {
@@ -128,25 +117,13 @@ export class DecreaseHeading {
             return true;
         }
 
-        const isOneLine =
-            editor.getCursor("from").line === editor.getCursor("to").line;
-
-        // Dispatch Transaction
         const editorChange = composeLineChanges(
             editor,
             headingLines,
             decreaseHeading,
             this.settings,
         );
-        editor.transaction({
-            changes: editorChange,
-        });
-
-        // If only one line is targeted, move the cursor to the end of the line.
-        if (isOneLine) {
-            editor.setCursor(editor.getCursor("anchor").line);
-        }
-        return editorChange.length ? true : false;
+        return dispatchHeadingChanges(editor, editorChange) === "applied";
     };
 
     createCommand = () => {
