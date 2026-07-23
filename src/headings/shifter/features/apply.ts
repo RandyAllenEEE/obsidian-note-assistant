@@ -146,16 +146,29 @@ export const createListIndentChangesByListBehavior = (
 // Operation Class
 import type { Command, Editor } from "obsidian";
 import { createRange } from "../utils/range";
-import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
+import {
+    composeLineChanges,
+    dispatchHeadingChanges,
+    type HeadingChangeDispatcher,
+} from "../utils/editorChange";
 import { t } from "../../../i18n/helpers";
 
 export class ApplyHeading {
     settings: MyHeadingsSettings;
     headingSize: number;
+    private readonly dispatch: HeadingChangeDispatcher;
+    private readonly getTabSize: (editor: Editor) => number;
 
-    constructor(settings: MyHeadingsSettings, headingSize: number) {
+    constructor(
+        settings: MyHeadingsSettings,
+        headingSize: number,
+        dispatch: HeadingChangeDispatcher = dispatchHeadingChanges,
+        getTabSize: (editor: Editor) => number = () => TABSIZE,
+    ) {
         this.settings = settings;
         this.headingSize = headingSize;
+        this.dispatch = dispatch;
+        this.getTabSize = getTabSize;
     }
 
     editorCallback = (editor: Editor): boolean => {
@@ -172,12 +185,15 @@ export class ApplyHeading {
 
         const indentChanges = createListIndentChangesByListBehavior(editor, {
             parentIndentLevel: this.headingSize - 1,
-            tabSize: this.settings.editor.tabSize,
+            tabSize: this.getTabSize(editor),
             listBehavior: this.settings.list.childrenBehavior,
             parentLineNumber: lastHeaderLineNumber,
         });
 
-        return dispatchHeadingChanges(editor, [...headingsChanges, ...indentChanges]) === "applied";
+        const cursorLine = editor.getCursor("from").line === editor.getCursor("to").line
+            ? editor.getCursor("from").line
+            : undefined;
+        return this.dispatch(editor, [...headingsChanges, ...indentChanges], cursorLine) === "applied";
     };
 
     createCommand = (): Command => {

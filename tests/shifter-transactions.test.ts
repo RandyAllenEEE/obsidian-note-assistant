@@ -3,6 +3,7 @@ import { ApplyHeading } from '../src/headings/shifter/features/apply';
 import { InsertHeadingAtCurrentLevel, InsertHeadingAtDeeperLevel } from '../src/headings/shifter/features/insert';
 import { DecreaseHeading, IncreaseHeading } from '../src/headings/shifter/features/shift';
 import { dispatchHeadingChanges } from '../src/headings/shifter/utils/editorChange';
+import { getEditorTabSize, rememberEditorTabSize } from '../src/headings/shifter/utils/tabSize';
 import { DEFAULT_MY_HEADINGS_SETTINGS } from '../src/settings';
 
 type Position = { line: number; ch: number };
@@ -13,6 +14,7 @@ class MockEditor {
     private from: Position;
     private to: Position;
     transactions: Change[][] = [];
+    selections: Array<{ from: Position; to: Position } | undefined> = [];
     setCursor = vi.fn(() => {
         throw new Error('setCursor must not be called after a transaction');
     });
@@ -42,9 +44,10 @@ class MockEditor {
 
     setSelection(): void {}
 
-    transaction(transaction: { changes?: Change[] }): void {
+    transaction(transaction: { changes?: Change[]; selection?: { from: Position; to: Position } }): void {
         const changes = transaction.changes ?? [];
         this.transactions.push(changes);
+        this.selections.push(transaction.selection);
         const source = this.getValue();
         const lineStarts: number[] = [];
         let offset = 0;
@@ -60,13 +63,16 @@ class MockEditor {
             next = next.slice(0, from) + change.text + next.slice(to);
         }
         this.lines = next.split('\n');
+        if (transaction.selection) {
+            this.from = { ...transaction.selection.from };
+            this.to = { ...transaction.selection.to };
+        }
     }
 }
 
 const settings = {
     ...DEFAULT_MY_HEADINGS_SETTINGS,
     list: { ...DEFAULT_MY_HEADINGS_SETTINGS.list },
-    editor: { ...DEFAULT_MY_HEADINGS_SETTINGS.editor },
 };
 
 describe('Heading Shifter transactions', () => {
@@ -74,10 +80,16 @@ describe('Heading Shifter transactions', () => {
         const single = new MockEditor('## Title');
         expect(new IncreaseHeading(settings, false).editorCallback(single as never)).toBe(true);
         expect(single.getValue()).toBe('### Title');
+        expect(single.getCursor()).toEqual({ line: 0, ch: 9 });
+        expect(single.selections[0]).toEqual({
+            from: { line: 0, ch: 9 },
+            to: { line: 0, ch: 9 },
+        });
         expect(single.setCursor).not.toHaveBeenCalled();
 
         expect(new DecreaseHeading(settings).editorCallback(single as never)).toBe(true);
         expect(single.getValue()).toBe('## Title');
+        expect(single.getCursor()).toEqual({ line: 0, ch: 8 });
         expect(single.setCursor).not.toHaveBeenCalled();
 
         const multiple = new MockEditor(
@@ -89,6 +101,14 @@ describe('Heading Shifter transactions', () => {
         expect(multiple.getValue()).toBe('## First\n### Second');
         expect(multiple.transactions).toHaveLength(1);
         expect(multiple.setCursor).not.toHaveBeenCalled();
+    });
+
+    it('changes only heading structure and leaves numbering for the later blur reconcile', () => {
+        const editor = new MockEditor('## 1.1 Stability');
+        expect(new IncreaseHeading(settings, false).editorCallback(editor as never)).toBe(true);
+        expect(editor.getValue()).toBe('### 1.1 Stability');
+        expect(editor.transactions).toHaveLength(1);
+        expect(editor.getCursor()).toEqual({ line: 0, ch: 17 });
     });
 
     it('does not dispatch a no-op or access a line beyond the end of the document', () => {
@@ -141,5 +161,15 @@ describe('Heading Shifter transactions', () => {
         ])).toBe('rejected');
         expect(overlapping.getValue()).toBe('Title');
         expect(overlapping.transactions).toEqual([]);
+    });
+
+    it('uses the live editor tab size and safely falls back when none was captured', () => {
+        const fallback = new MockEditor('Title');
+        expect(getEditorTabSize(fallback as never)).toBe(4);
+
+        for (const tabSize of [2, 4, 8]) {
+            rememberEditorTabSize(fallback as never, tabSize);
+            expect(getEditorTabSize(fallback as never)).toBe(tabSize);
+        }
     });
 });

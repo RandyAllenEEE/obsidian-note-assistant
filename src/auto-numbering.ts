@@ -12,14 +12,28 @@ import {
     resolveReconcileIntent,
 } from './utils/frontmatter';
 import { normalizeEdits } from './utils/reconcile';
+import { headingConfigSignature } from './headings/reconcile';
+import { formulaConfigSignature } from './formulas/reconcile';
+import {
+    FormulaNumberingConfig,
+    HeadingNumberingConfig,
+    ReconcileContext,
+    snapshotFormulaNumberingConfig,
+    snapshotHeadingNumberingConfig,
+} from './utils/reconcile-context';
 
-type ScheduledRunKind = 'blur' | 'clear-only';
+type ScheduledRunKind = 'blur' | 'clear-only' | 'config-change';
 
 interface ScheduledRun {
     timer: number;
     view: MarkdownView;
     path: string;
     kind: ScheduledRunKind;
+}
+
+interface EffectiveConfigSnapshot {
+    headings: ReturnType<typeof snapshotHeadingNumberingConfig>;
+    formulas: ReturnType<typeof snapshotFormulaNumberingConfig>;
 }
 
 export class AutoNumberingController {
@@ -35,6 +49,8 @@ export class AutoNumberingController {
     private metadataRefs: EventRef[] = [];
     private reportedInvalid = new Set<string>();
     private reportedAmbiguous = new Set<string>();
+    private pendingConfigContexts = new Map<string, ReconcileContext>();
+    private effectiveConfigCache = new Map<string, EffectiveConfigSnapshot>();
     private blurHandler: () => void;
     private focusHandler: () => void;
 
@@ -61,14 +77,13 @@ export class AutoNumberingController {
                 : activeView?.editor === editor ? activeView : undefined;
             if (!view?.file) return;
             this.dirtyFiles.add(view.file.path);
-            const policies = this.getPolicies(view.file);
-            if (policies.headings === 'none' || policies.formulas === 'none') this.schedule(view, 'clear-only');
         }));
 
         this.workspaceRefs.push(this.app.workspace.on('file-open', file => {
             if (!file) return;
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view?.file || view.file.path !== file.path) return;
+            this.cacheEffectiveConfigs(file);
             const policies = this.getPolicies(file);
             if (policies.headings === 'none' || policies.formulas === 'none') this.schedule(view, 'clear-only', 50);
         }));
@@ -76,14 +91,21 @@ export class AutoNumberingController {
         this.metadataRefs.push(this.app.metadataCache.on('changed', file => {
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view?.file || view.file.path !== file.path) return;
+            const configChanged = this.captureMetadataConfigChange(file);
             const policies = this.getPolicies(file);
-            if (policies.headings === 'none' || policies.formulas === 'none') this.schedule(view, 'clear-only', 50);
+            const focused = this.editorHasFocus(view);
+            if (configChanged && !focused) {
+                this.schedule(view, 'config-change');
+            } else if ((policies.headings === 'none' || policies.formulas === 'none') && !focused) {
+                this.schedule(view, 'clear-only', 50);
+            }
         }));
 
         this.app.workspace.onLayoutReady(() => {
             if (!this.isLoaded) return;
             const view = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (!view?.file) return;
+            this.cacheEffectiveConfigs(view.file);
             const policies = this.getPolicies(view.file);
             if (policies.headings === 'none' || policies.formulas === 'none') this.schedule(view, 'clear-only', 50);
         });
@@ -101,6 +123,8 @@ export class AutoNumberingController {
         this.dirtyFiles.clear();
         this.reportedInvalid.clear();
         this.reportedAmbiguous.clear();
+        this.pendingConfigContexts.clear();
+        this.effectiveConfigCache.clear();
         this.isLoaded = false;
     }
 
@@ -109,7 +133,48 @@ export class AutoNumberingController {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view?.file) return;
         const policies = this.getPolicies(view.file);
-        if (policies.headings === 'none' || policies.formulas === 'none') this.schedule(view, 'clear-only', 50);
+        if (policies.headings === 'auto' || policies.headings === 'none'
+            || policies.formulas === 'auto' || policies.formulas === 'none') {
+            this.schedule(view, 'config-change');
+        } else {
+            this.pendingConfigContexts.delete(view.file.path);
+        }
+    }
+
+    headingConfigurationChanged(previous: HeadingNumberingConfig): void {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file) return;
+        const fm = this.app.metadataCache.getFileCache(view.file)?.frontmatter;
+        const previousDefaults = {
+            ...this.plugin.settings.myHeadings,
+            ...previous,
+            headingStyles: [...previous.headingStyles],
+            headingSeparators: [...previous.headingSeparators],
+            headingStartValues: [...previous.headingStartValues],
+        };
+        const previousEffective = parseHeadingsFrontMatter(fm, previousDefaults).settings;
+        this.mergePendingContext(view.file.path, {
+            trigger: 'config-change',
+            acceptedHeadingConfigs: [snapshotHeadingNumberingConfig(previousEffective)],
+        });
+        this.cacheEffectiveConfigs(view.file);
+        this.schedule(view, 'config-change');
+    }
+
+    formulaConfigurationChanged(previous: FormulaNumberingConfig): void {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file) return;
+        const fm = this.app.metadataCache.getFileCache(view.file)?.frontmatter;
+        const previousEffective = parseFormulasFrontMatter(fm, {
+            ...this.plugin.settings.myFormulas,
+            ...previous,
+        }).settings;
+        this.mergePendingContext(view.file.path, {
+            trigger: 'config-change',
+            acceptedFormulaConfigs: [snapshotFormulaNumberingConfig(previousEffective)],
+        });
+        this.cacheEffectiveConfigs(view.file);
+        this.schedule(view, 'config-change');
     }
 
     private getPolicies(file: TFile): { headings?: string; formulas?: string } {
@@ -149,7 +214,12 @@ export class AutoNumberingController {
 
     private handleBlur(): void {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view?.file || !this.dirtyFiles.has(view.file.path)) return;
+        if (!view?.file) return;
+        if (this.pendingConfigContexts.has(view.file.path)) {
+            this.schedule(view, 'config-change');
+            return;
+        }
+        if (!this.dirtyFiles.has(view.file.path)) return;
         const policies = this.getPolicies(view.file);
         if (policies.headings === 'auto' || policies.headings === 'none' || policies.formulas === 'auto' || policies.formulas === 'none') {
             this.schedule(view, 'blur');
@@ -184,13 +254,19 @@ export class AutoNumberingController {
         kind: ScheduledRunKind,
     ): Promise<void> {
         if (!view.file || view.file.path !== expectedPath || this.isApplying) return;
-        if (!this.plugin.settings.myHeadings.enabled && !this.plugin.settings.myFormulas.enabled) return;
+        if (!this.plugin.settings.myHeadings.enabled && !this.plugin.settings.myFormulas.enabled) {
+            if (kind === 'config-change') this.pendingConfigContexts.delete(expectedPath);
+            return;
+        }
 
         const file = view.file;
         const source = view.editor.getValue();
         const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
         const headings = parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings);
         const formulas = parseFormulasFrontMatter(fm, this.plugin.settings.myFormulas);
+        const context = kind === 'config-change'
+            ? this.pendingConfigContexts.get(expectedPath) ?? { trigger: 'config-change' as const }
+            : { trigger: 'auto-blur' as const };
         const resolvedHeadingIntent = resolveReconcileIntent(this.plugin.settings.myHeadings.enabled, headings.policy);
         const resolvedFormulaIntent = resolveReconcileIntent(this.plugin.settings.myFormulas.enabled, formulas.policy);
         const headingIntent = kind === 'clear-only' && resolvedHeadingIntent !== 'clear'
@@ -203,11 +279,15 @@ export class AutoNumberingController {
             && (resolvedHeadingIntent === 'number' || resolvedFormulaIntent === 'number');
         if (!headingIntent && !formulaIntent) {
             if (!hasDeferredNumbering) this.dirtyFiles.delete(expectedPath);
+            if (kind === 'config-change') {
+                this.pendingConfigContexts.delete(expectedPath);
+                this.cacheEffectiveConfigs(file);
+            }
             return;
         }
 
-        const headingPlan = headingIntent ? this.headingsManager.buildPlan(file, source, headings, headingIntent) : undefined;
-        const formulaPlan = formulaIntent ? this.formulasManager.buildPlan(file, source, formulas, headings, formulaIntent) : undefined;
+        const headingPlan = headingIntent ? this.headingsManager.buildPlan(file, source, headings, headingIntent, context) : undefined;
+        const formulaPlan = formulaIntent ? this.formulasManager.buildPlan(file, source, formulas, headings, formulaIntent, context) : undefined;
         let edits;
         try {
             edits = normalizeEdits(source, [...(headingPlan?.edits ?? []), ...(formulaPlan?.edits ?? [])]);
@@ -225,9 +305,14 @@ export class AutoNumberingController {
                 headingPlan ? this.headingsManager.commitPlan(headingPlan) : Promise.resolve(),
                 formulaPlan ? this.formulasManager.commitPlan(formulaPlan) : Promise.resolve(),
             ]);
-            this.reportAmbiguous(expectedPath, 'headings', headingPlan?.ambiguousLines ?? []);
-            this.reportAmbiguous(expectedPath, 'formulas', formulaPlan?.ambiguousLines ?? []);
+            this.reportAmbiguousOnce(
+                expectedPath,
+                headingPlan?.ambiguousLines ?? [],
+                formulaPlan?.ambiguousLines ?? [],
+            );
             if (kind === 'blur' || !hasDeferredNumbering) this.dirtyFiles.delete(expectedPath);
+            if (kind === 'config-change') this.pendingConfigContexts.delete(expectedPath);
+            this.cacheEffectiveConfigs(file);
         } catch (error) {
             console.error('Note Assistant automatic reconcile failed', error);
         } finally {
@@ -235,15 +320,66 @@ export class AutoNumberingController {
         }
     }
 
-    private reportAmbiguous(path: string, module: 'headings' | 'formulas', lines: number[]): void {
-        if (lines.length === 0) return;
-        const key = `${path}\u0000${module}\u0000${lines.join(',')}`;
-        if (this.reportedAmbiguous.has(key)) return;
-        this.reportedAmbiguous.add(key);
-        const moduleName = t(module === 'headings' ? 'module.heading' : 'module.formula');
-        new Notice(t(
-            lines.length === 1 ? 'notice.ambiguousPreservedOne' : 'notice.ambiguousPreservedMany',
-            { count: lines.length, module: moduleName },
-        ));
+    reportAmbiguousOnce(path: string, headingLines: number[], formulaLines: number[]): void {
+        const count = new Set([...headingLines, ...formulaLines]).size;
+        if (count === 0 || this.reportedAmbiguous.has(path)) return;
+        this.reportedAmbiguous.add(path);
+        new Notice(t('notice.ambiguousPreservedNote', { count }));
+    }
+
+    private editorHasFocus(view: MarkdownView): boolean {
+        try {
+            return typeof view.editor.hasFocus === 'function' && view.editor.hasFocus();
+        } catch {
+            return false;
+        }
+    }
+
+    private effectiveConfigs(file: TFile): EffectiveConfigSnapshot {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        return {
+            headings: snapshotHeadingNumberingConfig(
+                parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings).settings,
+            ),
+            formulas: snapshotFormulaNumberingConfig(
+                parseFormulasFrontMatter(fm, this.plugin.settings.myFormulas).settings,
+            ),
+        };
+    }
+
+    private cacheEffectiveConfigs(file: TFile): void {
+        this.effectiveConfigCache.set(file.path, this.effectiveConfigs(file));
+    }
+
+    private captureMetadataConfigChange(file: TFile): boolean {
+        const previous = this.effectiveConfigCache.get(file.path);
+        const current = this.effectiveConfigs(file);
+        this.effectiveConfigCache.set(file.path, current);
+        if (!previous) return false;
+
+        const headingsChanged = headingConfigSignature(previous.headings) !== headingConfigSignature(current.headings);
+        const formulasChanged = formulaConfigSignature(previous.formulas) !== formulaConfigSignature(current.formulas);
+        if (!headingsChanged && !formulasChanged) return false;
+        this.mergePendingContext(file.path, {
+            trigger: 'config-change',
+            acceptedHeadingConfigs: headingsChanged ? [previous.headings] : undefined,
+            acceptedFormulaConfigs: formulasChanged ? [previous.formulas] : undefined,
+        });
+        return true;
+    }
+
+    private mergePendingContext(path: string, incoming: ReconcileContext): void {
+        const current = this.pendingConfigContexts.get(path);
+        this.pendingConfigContexts.set(path, {
+            trigger: 'config-change',
+            acceptedHeadingConfigs: [
+                ...(current?.acceptedHeadingConfigs ?? []),
+                ...(incoming.acceptedHeadingConfigs ?? []),
+            ],
+            acceptedFormulaConfigs: [
+                ...(current?.acceptedFormulaConfigs ?? []),
+                ...(incoming.acceptedFormulaConfigs ?? []),
+            ],
+        });
     }
 }

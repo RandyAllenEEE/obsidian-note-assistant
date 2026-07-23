@@ -36,4 +36,13 @@ describe('settings normalization', () => {
         expect(settings.ownership.headings['note.md']).toHaveLength(1);
         expect(settings.ownership.formulas).toEqual({});
     });
+
+    it('ignores the removed legacy tab-size setting and upgrades normalized data', () => {
+        const settings = normalizeSettings({
+            dataVersion: 1,
+            myHeadings: { editor: { tabSize: 8 } },
+        });
+        expect(settings.dataVersion).toBe(2);
+        expect(settings.myHeadings).not.toHaveProperty('editor');
+    });
 });

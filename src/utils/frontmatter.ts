@@ -85,7 +85,6 @@ function cloneHeadings(settings: MyHeadingsSettings): MyHeadingsSettings {
             surrounding: { ...settings.styleToRemove.surrounding, userDefined: [...settings.styleToRemove.surrounding.userDefined] },
         },
         list: { ...settings.list },
-        editor: { ...settings.editor },
     };
 }
 

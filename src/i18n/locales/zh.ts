@@ -70,8 +70,6 @@ const zh = {
     'shifter.outdentToZero': '减少缩进至 0',
     'shifter.syncWithHeadings': '与标题同步',
     'shifter.nothing': '不处理',
-    'shifter.editor': '编辑器',
-    'shifter.tabSize': 'Tab 宽度',
 
     'command.configureHeadings': '配置标题',
     'command.configureFormulas': '配置公式',
@@ -114,8 +112,7 @@ const zh = {
     'notice.unableToSaveHeadings': '无法保存标题设置',
     'notice.unableToSaveFormulas': '无法保存公式设置',
     'notice.invalidFrontmatter': '{module}编号 frontmatter 无效：{errors}',
-    'notice.ambiguousPreservedOne': '已保留 {count} 个存疑的{module}编号。请使用“移除编号”进行检查。',
-    'notice.ambiguousPreservedMany': '已保留 {count} 个存疑的{module}编号。请使用“移除编号”进行检查。',
+    'notice.ambiguousPreservedNote': '本笔记有 {count} 个疑似编号因格式无法确认而被保留；本次插件会话不再重复提示。',
     'notice.cannotIncreasePastH6': '无法继续增加标题级别：最高为 H6。',
     'notice.cannotDecreasePastLimit': '无法继续减少标题级别：当前下限为 H{level}。',
     'notice.headingEditCancelled': '标题编辑范围已失效，为避免错误修改，本次操作已取消。',

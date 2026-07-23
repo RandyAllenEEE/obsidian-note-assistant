@@ -68,8 +68,6 @@ const en = {
     'shifter.outdentToZero': 'Outdent to 0',
     'shifter.syncWithHeadings': 'Sync with headings',
     'shifter.nothing': 'Nothing',
-    'shifter.editor': 'Editor',
-    'shifter.tabSize': 'Tab size',
 
     'command.configureHeadings': 'Configure Headings',
     'command.configureFormulas': 'Configure Formulas',
@@ -112,8 +110,7 @@ const en = {
     'notice.unableToSaveHeadings': 'Unable to save heading settings',
     'notice.unableToSaveFormulas': 'Unable to save formula settings',
     'notice.invalidFrontmatter': 'Invalid {module} numbering frontmatter: {errors}',
-    'notice.ambiguousPreservedOne': '{count} ambiguous {module} number was preserved. Use Remove Numbering to review it.',
-    'notice.ambiguousPreservedMany': '{count} ambiguous {module} numbers were preserved. Use Remove Numbering to review them.',
+    'notice.ambiguousPreservedNote': 'This note contains {count} possible numbering values that could not be verified and were preserved. This notice will not be repeated during this plugin session.',
     'notice.cannotIncreasePastH6': 'Cannot increase heading level beyond Heading 6.',
     'notice.cannotDecreasePastLimit': 'Cannot decrease heading level beyond Heading {level}.',
     'notice.headingEditCancelled': 'The heading edit was cancelled because its document range was no longer safe.',

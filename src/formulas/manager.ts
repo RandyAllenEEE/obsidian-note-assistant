@@ -13,6 +13,7 @@ import {
 } from '../utils/frontmatter';
 import { FormulasControlModal } from './modal';
 import { FormulaReconcilePlan, planFormulaReconcile } from './reconcile';
+import { ReconcileContext } from '../utils/reconcile-context';
 
 export interface FormulaExecutionPlan extends FormulaReconcilePlan {
     filePath: string;
@@ -71,12 +72,13 @@ export class FormulasManager {
         parsed: ParsedFormulasFrontMatter,
         headings: ParsedHeadingsFrontMatter,
         intent: ReconcileIntent,
+        context?: ReconcileContext,
     ): FormulaExecutionPlan | undefined {
         if (!this.plugin.settings.myFormulas.enabled || parsed.policy === 'off' || parsed.policy === 'invalid') return undefined;
         if (parsed.settings.mode === 'heading-based' && headings.policy === 'invalid') return undefined;
         const records = this.plugin.getOwnershipRecords('formulas', file.path);
         return {
-            ...planFormulaReconcile(source, parsed.settings, headings.settings, intent, records),
+            ...planFormulaReconcile(source, parsed.settings, headings.settings, intent, records, context),
             filePath: file.path,
             source,
         };
@@ -91,6 +93,7 @@ export class FormulasManager {
         parsed?: ParsedFormulasFrontMatter,
         headings?: ParsedHeadingsFrontMatter,
         explicitIntent?: ReconcileIntent,
+        context?: ReconcileContext,
     ): Promise<FormulaRunResult> {
         if (!this.plugin.settings.myFormulas.enabled || !view.file) {
             return { changed: false, ambiguousLines: [], skipped: true };
@@ -104,7 +107,7 @@ export class FormulasManager {
         }
 
         const source = view.editor.getValue();
-        const plan = this.buildPlan(view.file, source, resolved, headingSettings, intent);
+        const plan = this.buildPlan(view.file, source, resolved, headingSettings, intent, context);
         if (!plan) return { changed: false, ambiguousLines: [], skipped: true };
         if (view.file.path !== plan.filePath || view.editor.getValue() !== source) {
             return { changed: false, ambiguousLines: plan.ambiguousLines, skipped: true };
@@ -114,7 +117,12 @@ export class FormulasManager {
         return { changed, ambiguousLines: plan.ambiguousLines, skipped: false };
     }
 
-    async applySettingsToFile(file: TFile, settings: MyFormulasSettings, intent: ReconcileIntent): Promise<FormulaRunResult> {
+    async applySettingsToFile(
+        file: TFile,
+        settings: MyFormulasSettings,
+        intent: ReconcileIntent,
+        context?: ReconcileContext,
+    ): Promise<FormulaRunResult> {
         if (!this.plugin.settings.myFormulas.enabled) return { changed: false, ambiguousLines: [], skipped: true };
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view?.file || view.file.path !== file.path) return { changed: false, ambiguousLines: [], skipped: true };
@@ -130,6 +138,7 @@ export class FormulasManager {
             parsed,
             parseHeadingsFrontMatter(fm, this.plugin.settings.myHeadings),
             intent,
+            context,
         );
     }
 

@@ -2,6 +2,7 @@
 import { Setting } from 'obsidian';
 import { FormulasManager } from './manager';
 import { t } from '../i18n/helpers';
+import { snapshotFormulaNumberingConfig } from '../utils/reconcile-context';
 
 export function renderFormulasSettings(containerEl: HTMLElement, manager: FormulasManager) {
     const settings = manager.plugin.settings.myFormulas;
@@ -12,8 +13,10 @@ export function renderFormulasSettings(containerEl: HTMLElement, manager: Formul
         .addToggle(toggle => toggle
             .setValue(settings.auto)
             .onChange(async (value) => {
+                const previous = snapshotFormulaNumberingConfig(settings);
                 settings.auto = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.formulaConfigurationChanged(previous);
             }));
 
     new Setting(containerEl)
@@ -24,8 +27,11 @@ export function renderFormulasSettings(containerEl: HTMLElement, manager: Formul
             .addOption('heading-based', t('formulas.headingBased'))
             .setValue(settings.mode)
             .onChange(async (value: 'continuous' | 'heading-based') => {
+                const previous = snapshotFormulaNumberingConfig(settings);
                 settings.mode = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.formulaConfigurationChanged(previous);
+                updateVisibility();
             }));
 
     const depthSetting = new Setting(containerEl)
@@ -36,8 +42,10 @@ export function renderFormulasSettings(containerEl: HTMLElement, manager: Formul
             .setValue(settings.maxDepth)
             .setDynamicTooltip()
             .onChange(async (value) => {
+                const previous = snapshotFormulaNumberingConfig(settings);
                 settings.maxDepth = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.formulaConfigurationChanged(previous);
             }));
 
     // Visibility logic

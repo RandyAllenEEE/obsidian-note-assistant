@@ -46,7 +46,13 @@ export const composeLineChanges = (
 
 export type HeadingChangeDispatchStatus = "applied" | "unchanged" | "rejected";
 
-type TransactionEditor = MinimumEditor & Pick<Editor, "transaction">;
+type TransactionEditor = Editor;
+
+export type HeadingChangeDispatcher = (
+    editor: TransactionEditor,
+    changes: EditorChange[],
+    cursorLine?: number,
+) => HeadingChangeDispatchStatus;
 
 interface PreparedChange {
     change: EditorChange;
@@ -63,12 +69,20 @@ function validPosition(position: EditorPosition, lines: string[]): boolean {
         && position.ch <= lines[position.line].length;
 }
 
-function prepareEditorChanges(
+interface HeadingChangePreview {
+    source: string;
+    result: string;
+    changes: EditorChange[];
+}
+
+function previewHeadingChanges(
     editor: TransactionEditor,
     changes: EditorChange[],
-): EditorChange[] | undefined {
+): HeadingChangePreview | undefined {
     const lineCount = editor.lineCount();
-    if (!Number.isInteger(lineCount) || lineCount < 1) return changes.length === 0 ? [] : undefined;
+    if (!Number.isInteger(lineCount) || lineCount < 1) {
+        return changes.length === 0 ? { source: "", result: "", changes: [] } : undefined;
+    }
 
     const lines: string[] = [];
     try {
@@ -127,22 +141,39 @@ function prepareEditorChanges(
         if (overlaps) return undefined;
     }
 
-    return prepared.map(item => item.change);
+    let result = source;
+    for (let index = prepared.length - 1; index >= 0; index--) {
+        const item = prepared[index];
+        result = result.slice(0, item.fromOffset) + item.change.text + result.slice(item.toOffset);
+    }
+    return { source, result, changes: prepared.map(item => item.change) };
 }
 
 export function dispatchHeadingChanges(
     editor: TransactionEditor,
     changes: EditorChange[],
+    cursorLine?: number,
 ): HeadingChangeDispatchStatus {
-    const prepared = prepareEditorChanges(editor, changes);
-    if (!prepared) {
+    const preview = previewHeadingChanges(editor, changes);
+    if (!preview) {
         new Notice(t("notice.headingEditCancelled"));
         return "rejected";
     }
-    if (prepared.length === 0) return "unchanged";
+    if (preview.changes.length === 0) return "unchanged";
+
+    let selection;
+    if (cursorLine !== undefined) {
+        const resultLines = preview.result.split("\n");
+        if (!Number.isInteger(cursorLine) || cursorLine < 0 || cursorLine >= resultLines.length) {
+            new Notice(t("notice.headingEditCancelled"));
+            return "rejected";
+        }
+        const position = { line: cursorLine, ch: resultLines[cursorLine].length };
+        selection = { from: position, to: position };
+    }
 
     try {
-        editor.transaction({ changes: prepared });
+        editor.transaction({ changes: preview.changes, selection });
         return "applied";
     } catch (error) {
         console.error("Note Assistant rejected a heading edit transaction", error);

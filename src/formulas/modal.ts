@@ -9,6 +9,7 @@ import {
     saveSettingsToFrontMatter,
 } from '../utils/frontmatter';
 import { MyFormulasSettings } from '../settings';
+import { FormulaNumberingConfig, snapshotFormulaNumberingConfig } from '../utils/reconcile-context';
 
 type EditablePolicy = Exclude<FileNumberingPolicy, 'invalid'>;
 
@@ -21,6 +22,7 @@ export class FormulasControlModal extends Modal {
     private unsupportedTokens: string[];
     private rawValue?: string;
     private originalSettings: string;
+    private readonly originalNumberingConfig: FormulaNumberingConfig;
 
     constructor(app: App, plugin: NoteAssistantPlugin, file: TFile) {
         super(app);
@@ -33,6 +35,7 @@ export class FormulasControlModal extends Modal {
         this.unsupportedTokens = parsed.unsupportedTokens ?? [];
         this.rawValue = parsed.rawValue;
         this.originalSettings = this.settingsSignature();
+        this.originalNumberingConfig = snapshotFormulaNumberingConfig(this.settings);
     }
 
     onOpen(): void {
@@ -89,7 +92,12 @@ export class FormulasControlModal extends Modal {
                 .setButtonText(t('numbering.remove'))
                 .setWarning()
                 .onClick(async () => {
-                    const result = await this.plugin.formulasManager.applySettingsToFile(this.file, this.settings, 'clear');
+                    const result = await this.plugin.formulasManager.applySettingsToFile(
+                        this.file,
+                        this.settings,
+                        'clear',
+                        { trigger: 'explicit-apply', acceptedFormulaConfigs: [this.originalNumberingConfig] },
+                    );
                     if (result.skipped) new Notice(t('notice.targetInactive'));
                     else {
                         new Notice(t('notice.formulaRemoved'));
@@ -128,7 +136,12 @@ export class FormulasControlModal extends Modal {
             return;
         }
         const intent = this.policy === 'none' ? 'clear' : 'number';
-        const result = await this.plugin.formulasManager.applySettingsToFile(this.file, this.settings, intent);
+        const result = await this.plugin.formulasManager.applySettingsToFile(
+            this.file,
+            this.settings,
+            intent,
+            { trigger: 'explicit-apply', acceptedFormulaConfigs: [this.originalNumberingConfig] },
+        );
         if (result.skipped) {
             new Notice(t('notice.targetInactive'));
             return;

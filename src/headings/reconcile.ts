@@ -7,6 +7,11 @@ import {
     NumberingToken,
 } from '../utils/numbering-tokens';
 import { AmbiguousCandidate, escapeRegExp, fingerprintText, normalizeEdits, scanMarkdownLines, TextEdit } from '../utils/reconcile';
+import {
+    DEFAULT_RECONCILE_CONTEXT,
+    HeadingNumberingConfig,
+    ReconcileContext,
+} from '../utils/reconcile-context';
 
 export interface HeadingExpectation {
     line: number;
@@ -40,7 +45,7 @@ function tokenPattern(style: NumberingStyle): string {
     }
 }
 
-function configSignature(settings: MyHeadingsSettings): string {
+export function headingConfigSignature(settings: HeadingNumberingConfig): string {
     return JSON.stringify({
         firstLevel: settings.firstLevel,
         maxLevel: settings.maxLevel,
@@ -49,6 +54,41 @@ function configSignature(settings: MyHeadingsSettings): string {
         starts: settings.headingStartValues,
         skip: settings.skipHeadings,
     });
+}
+
+export function parseHeadingConfigSignature(value: string): HeadingNumberingConfig | undefined {
+    try {
+        const parsed = JSON.parse(value) as Record<string, unknown>;
+        const styles = parsed.styles;
+        const separators = parsed.separators;
+        const starts = parsed.starts;
+        if (!Number.isInteger(parsed.firstLevel)
+            || !Number.isInteger(parsed.maxLevel)
+            || Number(parsed.firstLevel) < 1
+            || Number(parsed.maxLevel) > 6
+            || Number(parsed.firstLevel) > Number(parsed.maxLevel)
+            || !Array.isArray(styles)
+            || styles.length !== 6
+            || styles.some(style => typeof style !== 'string' || !['1', 'a', 'A', 'I', '一', '①'].includes(style))
+            || !Array.isArray(separators)
+            || separators.length !== 6
+            || separators.some(separator => typeof separator !== 'string' || separator.length > 1)
+            || !Array.isArray(starts)
+            || starts.length !== 6
+            || starts.some(start => typeof start !== 'string')) {
+            return undefined;
+        }
+        return {
+            firstLevel: Number(parsed.firstLevel),
+            maxLevel: Number(parsed.maxLevel),
+            headingStyles: [...styles] as string[],
+            headingSeparators: [...separators] as string[],
+            headingStartValues: [...starts] as string[],
+            skipHeadings: typeof parsed.skip === 'string' ? parsed.skip : '',
+        };
+    } catch {
+        return undefined;
+    }
 }
 
 function makeExpectedToken(stack: NumberingToken[], separators: string[]): string {
@@ -112,23 +152,37 @@ export function computeHeadingExpectations(source: string, settings: MyHeadingsS
     return headings;
 }
 
-function configuredPrefix(body: string, settings: MyHeadingsSettings): { token: string; consumed: number } | undefined {
+function prefixPattern(config: HeadingNumberingConfig, depth: number, includeTrailingSeparator: boolean): string {
     const styles: NumberingStyle[] = [];
+    for (let component = 0; component < depth; component++) {
+        const level = config.firstLevel + component;
+        const styleIndex = Math.min(level - 1, config.headingStyles.length - 1);
+        styles.push(supportedStyle(config.headingStyles[styleIndex]));
+    }
+    let pattern = tokenPattern(styles[0]);
+    for (let index = 1; index < styles.length; index++) {
+        pattern += `${escapeRegExp(config.headingSeparators[index] || '')}${tokenPattern(styles[index])}`;
+    }
+    if (includeTrailingSeparator) pattern += escapeRegExp(config.headingSeparators[0] || '');
+    return pattern;
+}
+
+export function matchesHeadingNumberingToken(token: string, config: HeadingNumberingConfig): boolean {
+    const maxDepth = config.maxLevel - config.firstLevel + 1;
+    for (let depth = 1; depth <= maxDepth; depth++) {
+        if (new RegExp(`^${prefixPattern(config, depth, false)}$`).test(token)) return true;
+    }
+    return false;
+}
+
+function configuredPrefix(body: string, config: HeadingNumberingConfig): { token: string; consumed: number } | undefined {
     const matches: Array<{ token: string; consumed: number }> = [];
-
-    for (let level = settings.firstLevel; level <= 6; level++) {
-        const styleIndex = Math.min(level - 1, settings.headingStyles.length - 1);
-        styles.push(supportedStyle(settings.headingStyles[styleIndex]));
-
-        let pattern = tokenPattern(styles[0]);
-        for (let index = 1; index < styles.length; index++) {
-            pattern += `${escapeRegExp(settings.headingSeparators[index] || '')}${tokenPattern(styles[index])}`;
-        }
-        pattern += escapeRegExp(settings.headingSeparators[0] || '');
+    const maxDepth = config.maxLevel - config.firstLevel + 1;
+    for (let depth = 1; depth <= maxDepth; depth++) {
+        const pattern = prefixPattern(config, depth, true);
         const match = body.match(new RegExp(`^(${pattern})[ \\t]+`));
         if (match) matches.push({ token: match[1], consumed: match[0].length });
     }
-
     return matches.sort((left, right) => right.consumed - left.consumed)[0];
 }
 
@@ -136,29 +190,72 @@ function bodyHash(body: string): string {
     return fingerprintText(body.trim());
 }
 
-function findUniqueOwnedMatches(
+function recordedPrefixes(
     expectations: HeadingExpectation[],
     records: ManagedNumberRecord[],
-): Map<number, ManagedNumberRecord> {
-    const candidatesByLine = new Map<number, ManagedNumberRecord[]>();
+): Map<number, { token: string; consumed: number }> {
+    const matchesByHeading = new Map<number, Array<{ token: string; consumed: number }>>();
     for (const record of records) {
-        if (!record.token) continue;
-        const matches = expectations.filter(expectation => {
-            if (!expectation.body.startsWith(`${record.token} `)) return false;
-            return bodyHash(expectation.body.slice(record.token.length + 1)) === record.elementHash;
+        if (!parseHeadingConfigSignature(record.configSignature) || !record.token) continue;
+        const matcher = new RegExp(`^(${escapeRegExp(record.token)})[ \\t]+`);
+        const matches = expectations.flatMap(expectation => {
+            const match = expectation.body.match(matcher);
+            if (!match) return [];
+            const rest = expectation.body.slice(match[0].length);
+            return bodyHash(rest) === record.elementHash
+                ? [{ expectation, prefix: { token: record.token, consumed: match[0].length } }]
+                : [];
         });
         if (matches.length !== 1) continue;
-        const line = matches[0].line;
-        const candidates = candidatesByLine.get(line) ?? [];
-        candidates.push(record);
-        candidatesByLine.set(line, candidates);
+        const match = matches[0];
+        const candidates = matchesByHeading.get(match.expectation.contentStart) ?? [];
+        candidates.push(match.prefix);
+        matchesByHeading.set(match.expectation.contentStart, candidates);
     }
 
-    const byLine = new Map<number, ManagedNumberRecord>();
-    for (const [line, candidates] of candidatesByLine) {
-        if (candidates.length === 1) byLine.set(line, candidates[0]);
+    const result = new Map<number, { token: string; consumed: number }>();
+    for (const [contentStart, matches] of matchesByHeading) {
+        if (matches.length === 1) result.set(contentStart, matches[0]);
     }
-    return byLine;
+    return result;
+}
+
+function suspiciousPrefix(body: string): { token: string; consumed: number } | undefined {
+    const scalar = '(?:[0-9]+|[⓪①-⑳]|[零一二三四五六七八九十])';
+    const structured = `(?:${scalar}(?:[-:.—]${scalar})*|[A-Za-zIVXLCDM]+(?:[-:.—][A-Za-z0-9IVXLCDM]+)+)`;
+    const match = body.match(new RegExp(`^(${structured})[ \\t]+`));
+    return match ? { token: match[1], consumed: match[0].length } : undefined;
+}
+
+function acceptedConfigs(
+    settings: MyHeadingsSettings,
+    records: ManagedNumberRecord[],
+    context: ReconcileContext,
+): HeadingNumberingConfig[] {
+    const configs: HeadingNumberingConfig[] = [settings, ...(context.acceptedHeadingConfigs ?? [])];
+    for (const record of records) {
+        const parsed = parseHeadingConfigSignature(record.configSignature);
+        if (parsed) configs.push(parsed);
+    }
+    const seen = new Set<string>();
+    return configs.filter(config => {
+        const signature = headingConfigSignature(config);
+        if (seen.has(signature)) return false;
+        seen.add(signature);
+        return true;
+    });
+}
+
+function managedPrefix(
+    body: string,
+    configs: HeadingNumberingConfig[],
+    recorded?: { token: string; consumed: number },
+): { token: string; consumed: number } | undefined {
+    const matches = configs
+        .map(config => configuredPrefix(body, config))
+        .filter((match): match is { token: string; consumed: number } => Boolean(match));
+    if (recorded) matches.push(recorded);
+    return matches.sort((left, right) => right.consumed - left.consumed)[0];
 }
 
 function deduplicateRecords(records: ManagedNumberRecord[]): ManagedNumberRecord[] {
@@ -176,12 +273,13 @@ export function planHeadingReconcile(
     settings: MyHeadingsSettings,
     intent: 'number' | 'clear',
     existingRecords: ManagedNumberRecord[] = [],
+    context: ReconcileContext = DEFAULT_RECONCILE_CONTEXT,
 ): HeadingReconcilePlan {
     const expectations = computeHeadingExpectations(source, settings);
-    const signature = configSignature(settings);
+    const signature = headingConfigSignature(settings);
     const records = deduplicateRecords(existingRecords);
-    const ownedByLine = findUniqueOwnedMatches(expectations, records);
-    const usedRecords = new Set<ManagedNumberRecord>();
+    const configs = acceptedConfigs(settings, records, context);
+    const recorded = recordedPrefixes(expectations, records);
     const nextRecords: ManagedNumberRecord[] = [];
     const ambiguousLines: number[] = [];
     const ambiguousCandidates: AmbiguousCandidate[] = [];
@@ -189,21 +287,18 @@ export function planHeadingReconcile(
 
     for (const expectation of expectations) {
         const expected = expectation.expectedToken;
-        const exact = expected !== undefined && expectation.body.startsWith(`${expected} `);
-        const owned = ownedByLine.get(expectation.line);
-        if (owned) usedRecords.add(owned);
-        const managedToken = exact ? expected : owned?.token;
+        const managed = managedPrefix(expectation.body, configs, recorded.get(expectation.contentStart));
 
         if (intent === 'clear') {
-            if (managedToken) {
+            if (managed) {
                 edits.push({
                     from: expectation.contentStart,
-                    to: expectation.contentStart + managedToken.length + 1,
+                    to: expectation.contentStart + managed.consumed,
                     text: '',
                 });
                 continue;
             }
-            const ambiguous = expected ? configuredPrefix(expectation.body, settings) : undefined;
+            const ambiguous = expected ? suspiciousPrefix(expectation.body) : undefined;
             if (ambiguous) {
                 ambiguousLines.push(expectation.line + 1);
                 ambiguousCandidates.push({
@@ -220,40 +315,34 @@ export function planHeadingReconcile(
         }
 
         if (!expected) {
-            if (owned) {
+            if (managed) {
                 edits.push({
                     from: expectation.contentStart,
-                    to: expectation.contentStart + owned.token.length + 1,
+                    to: expectation.contentStart + managed.consumed,
                     text: '',
                 });
             }
             continue;
         }
 
-        if (exact) {
+        if (managed) {
+            const rest = expectation.body.slice(managed.consumed);
+            if (managed.token !== expected || managed.consumed !== expected.length + 1) {
+                edits.push({
+                    from: expectation.contentStart,
+                    to: expectation.contentStart + managed.consumed,
+                    text: `${expected} `,
+                });
+            }
             nextRecords.push({
-                elementHash: bodyHash(expectation.body.slice(expected.length + 1)),
+                elementHash: bodyHash(rest),
                 token: expected,
                 configSignature: signature,
                 level: expectation.level,
             });
             continue;
         }
-        if (owned) {
-            edits.push({
-                from: expectation.contentStart,
-                to: expectation.contentStart + owned.token.length,
-                text: expected,
-            });
-            nextRecords.push({
-                elementHash: owned.elementHash,
-                token: expected,
-                configSignature: signature,
-                level: expectation.level,
-            });
-            continue;
-        }
-        const ambiguous = configuredPrefix(expectation.body, settings);
+        const ambiguous = suspiciousPrefix(expectation.body);
         if (ambiguous) {
             ambiguousLines.push(expectation.line + 1);
             ambiguousCandidates.push({
@@ -277,13 +366,9 @@ export function planHeadingReconcile(
         });
     }
 
-    for (const record of records) {
-        if (!usedRecords.has(record)) nextRecords.push(record);
-    }
-
     return {
         edits: normalizeEdits(source, edits),
-        records: intent === 'clear' ? records.filter(record => !usedRecords.has(record)) : deduplicateRecords(nextRecords),
+        records: intent === 'clear' ? [] : deduplicateRecords(nextRecords),
         ambiguousLines,
         ambiguousCandidates,
         expectations,

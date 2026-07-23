@@ -1,6 +1,15 @@
 import { ManagedNumberRecord, MyFormulasSettings, MyHeadingsSettings } from '../settings';
-import { computeHeadingExpectations } from '../headings/reconcile';
+import {
+    computeHeadingExpectations,
+    matchesHeadingNumberingToken,
+} from '../headings/reconcile';
 import { AmbiguousCandidate, fingerprintText, normalizeEdits, scanMarkdownLines, TextEdit } from '../utils/reconcile';
+import {
+    DEFAULT_RECONCILE_CONTEXT,
+    FormulaNumberingConfig,
+    HeadingNumberingConfig,
+    ReconcileContext,
+} from '../utils/reconcile-context';
 
 export interface DisplayMathBlock {
     start: number;
@@ -130,8 +139,23 @@ function formulaHash(source: string, block: DisplayMathBlock, tag?: FormulaTag):
     return fingerprintText(content.trim());
 }
 
-function configSignature(settings: MyFormulasSettings): string {
+export function formulaConfigSignature(settings: FormulaNumberingConfig): string {
     return JSON.stringify({ mode: settings.mode, maxDepth: settings.maxDepth });
+}
+
+export function parseFormulaConfigSignature(value: string): FormulaNumberingConfig | undefined {
+    try {
+        const parsed = JSON.parse(value) as Record<string, unknown>;
+        if ((parsed.mode !== 'continuous' && parsed.mode !== 'heading-based')
+            || !Number.isInteger(parsed.maxDepth)
+            || Number(parsed.maxDepth) < 1
+            || Number(parsed.maxDepth) > 6) {
+            return undefined;
+        }
+        return { mode: parsed.mode, maxDepth: Number(parsed.maxDepth) };
+    } catch {
+        return undefined;
+    }
 }
 
 function expectedFormulaNumbers(
@@ -163,23 +187,56 @@ function expectedFormulaNumbers(
     });
 }
 
-function findUniqueOwnedMatches(
-    source: string,
-    blocks: DisplayMathBlock[],
+function acceptedFormulaConfigs(
+    settings: MyFormulasSettings,
     records: ManagedNumberRecord[],
-): Map<number, ManagedNumberRecord> {
-    const result = new Map<number, ManagedNumberRecord>();
+    context: ReconcileContext,
+): FormulaNumberingConfig[] {
+    const configs: FormulaNumberingConfig[] = [settings, ...(context.acceptedFormulaConfigs ?? [])];
     for (const record of records) {
-        const matches = blocks.filter((block, index) => {
-            const tags = findTags(source, block);
-            return tags.length === 1 && tags[0].token === record.token && formulaHash(source, block, tags[0]) === record.elementHash;
-        });
-        if (matches.length === 1) {
-            const index = blocks.indexOf(matches[0]);
-            if (!result.has(index)) result.set(index, record);
-        }
+        const parsed = parseFormulaConfigSignature(record.configSignature);
+        if (parsed) configs.push(parsed);
     }
-    return result;
+    const seen = new Set<string>();
+    return configs.filter(config => {
+        const signature = formulaConfigSignature(config);
+        if (seen.has(signature)) return false;
+        seen.add(signature);
+        return true;
+    });
+}
+
+function acceptedHeadingConfigs(
+    settings: MyHeadingsSettings,
+    context: ReconcileContext,
+): HeadingNumberingConfig[] {
+    const configs: HeadingNumberingConfig[] = [settings, ...(context.acceptedHeadingConfigs ?? [])];
+    const seen = new Set<string>();
+    return configs.filter(config => {
+        const key = JSON.stringify(config);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function tagMatchesConfig(
+    value: string,
+    formulaConfigs: FormulaNumberingConfig[],
+    headingConfigs: HeadingNumberingConfig[],
+): boolean {
+    for (const config of formulaConfigs) {
+        if (config.mode === 'continuous' && /^\d+$/.test(value)) return true;
+        if (config.mode !== 'heading-based') continue;
+        if (/^\d+$/.test(value)) return true;
+        const match = value.match(/^(.*)-(\d+)$/);
+        if (!match) continue;
+        if (headingConfigs.some(heading => matchesHeadingNumberingToken(match[1], {
+            ...heading,
+            maxLevel: Math.min(heading.maxLevel, config.maxDepth),
+        }))) return true;
+    }
+    return false;
 }
 
 function deduplicateRecords(records: ManagedNumberRecord[]): ManagedNumberRecord[] {
@@ -192,18 +249,48 @@ function deduplicateRecords(records: ManagedNumberRecord[]): ManagedNumberRecord
     });
 }
 
+function recordedTags(
+    source: string,
+    blocks: DisplayMathBlock[],
+    records: ManagedNumberRecord[],
+): Map<number, ManagedNumberRecord> {
+    const matchesByBlock = new Map<number, ManagedNumberRecord[]>();
+    for (const record of records) {
+        if (!parseFormulaConfigSignature(record.configSignature)) continue;
+        const matches = blocks.filter(block => {
+            const tags = findTags(source, block);
+            return tags.length === 1
+                && tags[0].token === record.token
+                && formulaHash(source, block, tags[0]) === record.elementHash;
+        });
+        if (matches.length !== 1) continue;
+        const candidates = matchesByBlock.get(matches[0].start) ?? [];
+        candidates.push(record);
+        matchesByBlock.set(matches[0].start, candidates);
+    }
+
+    const result = new Map<number, ManagedNumberRecord>();
+    for (const [blockStart, matches] of matchesByBlock) {
+        if (matches.length === 1) result.set(blockStart, matches[0]);
+    }
+    return result;
+}
+
 export function planFormulaReconcile(
     source: string,
     settings: MyFormulasSettings,
     headingSettings: MyHeadingsSettings,
     intent: 'number' | 'clear',
     existingRecords: ManagedNumberRecord[] = [],
+    context: ReconcileContext = DEFAULT_RECONCILE_CONTEXT,
 ): FormulaReconcilePlan {
     const blocks = scanDisplayMathBlocks(source);
     const expectedNumbers = expectedFormulaNumbers(source, blocks, settings, headingSettings);
-    const ownedByBlock = findUniqueOwnedMatches(source, blocks, existingRecords);
-    const signature = configSignature(settings);
-    const usedRecords = new Set<ManagedNumberRecord>();
+    const records = deduplicateRecords(existingRecords);
+    const recorded = recordedTags(source, blocks, records);
+    const formulaConfigs = acceptedFormulaConfigs(settings, records, context);
+    const headingConfigs = acceptedHeadingConfigs(headingSettings, context);
+    const signature = formulaConfigSignature(settings);
     const nextRecords: ManagedNumberRecord[] = [];
     const ambiguousLines: number[] = [];
     const ambiguousCandidates: AmbiguousCandidate[] = [];
@@ -217,15 +304,15 @@ export function planFormulaReconcile(
         }
         const expectedToken = `\\tag{${expectedNumbers[index]}}`;
         const tag = tags[0];
-        const exact = tag?.token === expectedToken;
-        const owned = ownedByBlock.get(index);
-        if (owned) usedRecords.add(owned);
-        const managed = exact ? tag : owned && tag?.token === owned.token ? tag : undefined;
+        const record = tag ? recorded.get(block.start) : undefined;
+        const managed = tag && (tagMatchesConfig(tag.value, formulaConfigs, headingConfigs) || record)
+            ? tag
+            : undefined;
 
         if (intent === 'clear') {
             if (managed) {
                 let from = managed.from;
-                if (owned?.leadingSpace && source[from - 1] === ' ') from--;
+                if (record?.leadingSpace && source[from - 1] === ' ') from--;
                 edits.push({ from, to: managed.to, text: '' });
             } else if (tag) {
                 ambiguousLines.push(block.line + 1);
@@ -238,22 +325,15 @@ export function planFormulaReconcile(
             return;
         }
 
-        if (exact && tag) {
+        if (managed) {
+            if (managed.token !== expectedToken) {
+                edits.push({ from: managed.from, to: managed.to, text: expectedToken });
+            }
             nextRecords.push({
-                elementHash: formulaHash(source, block, tag),
+                elementHash: formulaHash(source, block, managed),
                 token: expectedToken,
                 configSignature: signature,
-                leadingSpace: owned?.leadingSpace ?? false,
-            });
-            return;
-        }
-        if (owned && tag?.token === owned.token) {
-            edits.push({ from: tag.from, to: tag.to, text: expectedToken });
-            nextRecords.push({
-                elementHash: owned.elementHash,
-                token: expectedToken,
-                configSignature: signature,
-                leadingSpace: owned.leadingSpace,
+                leadingSpace: record?.leadingSpace ?? source[managed.from - 1] === ' ',
             });
             return;
         }
@@ -276,13 +356,9 @@ export function planFormulaReconcile(
         });
     });
 
-    for (const record of existingRecords) {
-        if (!usedRecords.has(record)) nextRecords.push(record);
-    }
-
     return {
         edits: normalizeEdits(source, edits),
-        records: intent === 'clear' ? existingRecords.filter(record => !usedRecords.has(record)) : deduplicateRecords(nextRecords),
+        records: intent === 'clear' ? [] : deduplicateRecords(nextRecords),
         ambiguousLines,
         ambiguousCandidates,
         blocks,

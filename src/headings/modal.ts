@@ -10,6 +10,7 @@ import {
 } from '../utils/frontmatter';
 import { MyHeadingsSettings } from '../settings';
 import { DEFAULT_HEADING_SEPARATORS, DEFAULT_HEADING_START_VALUES, DEFAULT_HEADING_STYLES } from './manager';
+import { HeadingNumberingConfig, snapshotHeadingNumberingConfig } from '../utils/reconcile-context';
 
 type EditablePolicy = Exclude<FileNumberingPolicy, 'invalid'>;
 
@@ -22,6 +23,7 @@ export class HeadingsControlModal extends Modal {
     private unsupportedTokens: string[];
     private rawValue?: string;
     private originalSettings: string;
+    private readonly originalNumberingConfig: HeadingNumberingConfig;
 
     constructor(app: App, plugin: NoteAssistantPlugin, file: TFile) {
         super(app);
@@ -34,6 +36,7 @@ export class HeadingsControlModal extends Modal {
         this.unsupportedTokens = parsed.unsupportedTokens ?? [];
         this.rawValue = parsed.rawValue;
         this.originalSettings = this.settingsSignature();
+        this.originalNumberingConfig = snapshotHeadingNumberingConfig(this.settings);
     }
 
     onOpen(): void {
@@ -90,7 +93,12 @@ export class HeadingsControlModal extends Modal {
                 .setButtonText(t('numbering.remove'))
                 .setWarning()
                 .onClick(async () => {
-                    const result = await this.plugin.headingsManager.applySettingsToFile(this.file, this.settings, 'clear');
+                    const result = await this.plugin.headingsManager.applySettingsToFile(
+                        this.file,
+                        this.settings,
+                        'clear',
+                        { trigger: 'explicit-apply', acceptedHeadingConfigs: [this.originalNumberingConfig] },
+                    );
                     if (result.skipped) new Notice(t('notice.targetInactive'));
                     else {
                         new Notice(t('notice.headingRemoved'));
@@ -181,7 +189,12 @@ export class HeadingsControlModal extends Modal {
             return;
         }
         const intent = this.policy === 'none' ? 'clear' : 'number';
-        const result = await this.plugin.headingsManager.applySettingsToFile(this.file, this.settings, intent);
+        const result = await this.plugin.headingsManager.applySettingsToFile(
+            this.file,
+            this.settings,
+            intent,
+            { trigger: 'explicit-apply', acceptedHeadingConfigs: [this.originalNumberingConfig] },
+        );
         if (result.skipped) {
             new Notice(t('notice.targetInactive'));
             return;

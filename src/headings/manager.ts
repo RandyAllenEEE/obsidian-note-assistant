@@ -11,6 +11,7 @@ import {
 } from '../utils/frontmatter';
 import { HeadingsControlModal } from './modal';
 import { HeadingReconcilePlan, planHeadingReconcile } from './reconcile';
+import { ReconcileContext } from '../utils/reconcile-context';
 import { ShifterManager } from './shifter/manager';
 
 export const DEFAULT_HEADING_STYLES = ['1', 'a', 'A', '一', '①', '1'];
@@ -78,11 +79,12 @@ export class HeadingsManager {
         source: string,
         parsed: ParsedHeadingsFrontMatter,
         intent: ReconcileIntent,
+        context?: ReconcileContext,
     ): HeadingExecutionPlan | undefined {
         if (!this.plugin.settings.myHeadings.enabled || parsed.policy === 'off' || parsed.policy === 'invalid') return undefined;
         const records = this.plugin.getOwnershipRecords('headings', file.path);
         return {
-            ...planHeadingReconcile(source, parsed.settings, intent, records),
+            ...planHeadingReconcile(source, parsed.settings, intent, records, context),
             filePath: file.path,
             source,
         };
@@ -96,6 +98,7 @@ export class HeadingsManager {
         view: MarkdownView,
         parsed?: ParsedHeadingsFrontMatter,
         explicitIntent?: ReconcileIntent,
+        context?: ReconcileContext,
     ): Promise<NumberingRunResult> {
         if (!this.plugin.settings.myHeadings.enabled || !view.file) {
             return { changed: false, ambiguousLines: [], skipped: true };
@@ -107,7 +110,7 @@ export class HeadingsManager {
         }
 
         const source = view.editor.getValue();
-        const plan = this.buildPlan(view.file, source, resolved, intent);
+        const plan = this.buildPlan(view.file, source, resolved, intent, context);
         if (!plan) return { changed: false, ambiguousLines: [], skipped: true };
         if (view.file.path !== plan.filePath || view.editor.getValue() !== source) {
             return { changed: false, ambiguousLines: plan.ambiguousLines, skipped: true };
@@ -117,7 +120,12 @@ export class HeadingsManager {
         return { changed, ambiguousLines: plan.ambiguousLines, skipped: false };
     }
 
-    async applySettingsToFile(file: TFile, settings: MyHeadingsSettings, intent: ReconcileIntent): Promise<NumberingRunResult> {
+    async applySettingsToFile(
+        file: TFile,
+        settings: MyHeadingsSettings,
+        intent: ReconcileIntent,
+        context?: ReconcileContext,
+    ): Promise<NumberingRunResult> {
         if (!this.plugin.settings.myHeadings.enabled) return { changed: false, ambiguousLines: [], skipped: true };
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view?.file || view.file.path !== file.path) return { changed: false, ambiguousLines: [], skipped: true };
@@ -127,7 +135,7 @@ export class HeadingsManager {
             errors: [],
             inherited: false,
         };
-        return this.reconcileView(view, parsed, intent);
+        return this.reconcileView(view, parsed, intent, context);
     }
 
     openAmbiguousCleanup(file: TFile, settings: MyHeadingsSettings): boolean {

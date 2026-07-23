@@ -14,8 +14,12 @@ export class Modal {
     close(): void {}
 }
 
+export const noticeMessages: string[] = [];
+
 export class Notice {
-    constructor(_message: string) {}
+    constructor(message: string) {
+        noticeMessages.push(message);
+    }
 }
 
 export class Setting {

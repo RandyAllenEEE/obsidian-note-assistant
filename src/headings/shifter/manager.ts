@@ -11,6 +11,11 @@ import {
     InsertHeadingAtDeeperLevel,
     InsertHeadingAtHigherLevel,
 } from "./features/insert";
+import {
+    dispatchHeadingChanges,
+    type HeadingChangeDispatcher,
+} from "./utils/editorChange";
+import { editorTabSizeTracker, getEditorTabSize } from "./utils/tabSize";
 
 export const HEADINGS = [0, 1, 2, 3, 4, 5, 6] as const;
 
@@ -36,16 +41,21 @@ export class ShifterManager {
 
     private addCommands() {
         const settings = this.plugin.settings.myHeadings;
+        // Shifter edits are deliberately limited to heading structure. The normal
+        // editor-change/blur lifecycle reconciles heading and formula numbers after
+        // the author has finished editing.
+        const dispatch: HeadingChangeDispatcher = dispatchHeadingChanges;
+        const insertDependencies = { dispatch, getTabSize: getEditorTabSize };
 
-        const increaseHeading = new IncreaseHeading(settings, false);
-        const increaseHeadingForced = new IncreaseHeading(settings, true);
-        const decreaseHeading = new DecreaseHeading(settings);
-        const insertHeadingAtCurrentLabel = new InsertHeadingAtCurrentLevel(settings);
-        const insertHeadingAtDeeperLevel = new InsertHeadingAtDeeperLevel(settings);
-        const insertHeadingAtHigherLevel = new InsertHeadingAtHigherLevel(settings);
+        const increaseHeading = new IncreaseHeading(settings, false, dispatch);
+        const increaseHeadingForced = new IncreaseHeading(settings, true, dispatch);
+        const decreaseHeading = new DecreaseHeading(settings, dispatch);
+        const insertHeadingAtCurrentLabel = new InsertHeadingAtCurrentLevel(settings, insertDependencies);
+        const insertHeadingAtDeeperLevel = new InsertHeadingAtDeeperLevel(settings, insertDependencies);
+        const insertHeadingAtHigherLevel = new InsertHeadingAtHigherLevel(settings, insertDependencies);
 
         HEADINGS.forEach((heading) => {
-            const applyHeadingCmd = new ApplyHeading(settings, heading);
+            const applyHeadingCmd = new ApplyHeading(settings, heading, dispatch, getEditorTabSize);
             this.plugin.addCommand({
                 ...this.withGlobalGate(applyHeadingCmd.createCommand()),
                 // Unified naming: Use the ID from the command itself (e.g., 'shifter-apply-heading-0')
@@ -88,6 +98,8 @@ export class ShifterManager {
                     ]),
                 ),
         );
+
+        this.plugin.registerEditorExtension(editorTabSizeTracker);
     }
 
     private withGlobalGate(command: Command): Command {

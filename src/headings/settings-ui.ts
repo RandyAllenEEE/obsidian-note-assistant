@@ -2,6 +2,7 @@
 import { Setting } from 'obsidian';
 import { HeadingsManager } from './manager';
 import { t } from '../i18n/helpers';
+import { snapshotHeadingNumberingConfig } from '../utils/reconcile-context';
 
 export function renderHeadingsSettings(containerEl: HTMLElement, manager: HeadingsManager) {
     const settings = manager.plugin.settings.myHeadings;
@@ -31,8 +32,10 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         .addToggle(toggle => toggle
             .setValue(settings.auto)
             .onChange(async (value) => {
+                const previous = snapshotHeadingNumberingConfig(settings);
                 settings.auto = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
             }));
 
     new Setting(autoNumberingContent)
@@ -42,9 +45,11 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
             .setValue(settings.firstLevel)
             .setDynamicTooltip()
             .onChange(async (value) => {
+                const previous = snapshotHeadingNumberingConfig(settings);
                 settings.firstLevel = value;
                 if (settings.maxLevel < value) settings.maxLevel = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
             }));
 
     new Setting(autoNumberingContent)
@@ -54,9 +59,11 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
             .setValue(settings.maxLevel)
             .setDynamicTooltip()
             .onChange(async (value) => {
+                const previous = snapshotHeadingNumberingConfig(settings);
                 settings.maxLevel = value;
                 if (settings.firstLevel > value) settings.firstLevel = value;
                 await manager.plugin.saveSettings();
+                manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
             }));
 
     // Style Grid
@@ -87,8 +94,10 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         });
         styleSelect.value = settings.headingStyles[i];
         styleSelect.onchange = async () => {
+            const previous = snapshotHeadingNumberingConfig(settings);
             settings.headingStyles[i] = styleSelect.value;
             await manager.plugin.saveSettings();
+            manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
         };
 
         // Separator Dropdown
@@ -98,8 +107,10 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         });
         sepSelect.value = settings.headingSeparators[i];
         sepSelect.onchange = async () => {
+            const previous = snapshotHeadingNumberingConfig(settings);
             settings.headingSeparators[i] = sepSelect.value;
             await manager.plugin.saveSettings();
+            manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
         };
 
         // Start Value Input
@@ -107,8 +118,10 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
         startInput.style.width = '100%';
         startInput.value = settings.headingStartValues[i];
         startInput.onchange = async () => {
+            const previous = snapshotHeadingNumberingConfig(settings);
             settings.headingStartValues[i] = startInput.value;
             await manager.plugin.saveSettings();
+            manager.plugin.autoNumberingController.headingConfigurationChanged(previous);
         };
     }
 
@@ -249,14 +262,4 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
                 });
         });
 
-    shifterContent.createEl('h3', { text: t('shifter.editor') });
-    new Setting(shifterContent).setName(t('shifter.tabSize')).addSlider((cb) => {
-        cb.setDynamicTooltip()
-            .setLimits(2, 8, 2)
-            .setValue(settings.editor.tabSize)
-            .onChange((v) => {
-                settings.editor.tabSize = v;
-                manager.plugin.saveSettings();
-            });
-    });
 }

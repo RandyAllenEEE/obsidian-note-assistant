@@ -90,7 +90,7 @@ describe('localized settings rendering', () => {
         const strings = renderSettings('en');
         expect(strings).toContain('Auto Number Headings');
         expect(strings).toContain('Auto Number Formulas');
-        expect(strings).toContain('Editor');
+        expect(strings).not.toContain('Tab size');
         expect(strings).toContain('Letter case affects numbering only (A, B, C / a, b, c); heading text is never changed.');
     });
 
@@ -98,7 +98,7 @@ describe('localized settings rendering', () => {
         const strings = renderSettings('zh-TW');
         expect(strings).toContain('自动标题编号');
         expect(strings).toContain('自动公式编号');
-        expect(strings).toContain('编辑器');
+        expect(strings).not.toContain('Tab 宽度');
         expect(strings).toContain('大小写仅影响编号（A、B、C / a、b、c），不会修改标题文字。');
         expect(strings).not.toContain('Auto Number Headings');
         expect(strings).not.toContain('Heading Shifter');

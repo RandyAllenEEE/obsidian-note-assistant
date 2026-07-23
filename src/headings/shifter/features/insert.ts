@@ -1,14 +1,28 @@
 import { type Command, type Editor, Notice } from "obsidian";
 import type { MyHeadingsSettings } from "../../../settings";
 import { applyHeading, createListIndentChangesByListBehavior } from "./apply";
-import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
+import {
+    composeLineChanges,
+    dispatchHeadingChanges,
+    type HeadingChangeDispatcher,
+} from "../utils/editorChange";
 import { checkHeading, getPreviousHeading } from "../utils/markdown";
 import { t } from "../../../i18n/helpers";
+import { TABSIZE } from "../utils/constants";
+
+interface InsertDependencies {
+    dispatch?: HeadingChangeDispatcher;
+    getTabSize?: (editor: Editor) => number;
+}
 
 export class InsertHeadingAtCurrentLevel {
     settings: MyHeadingsSettings;
-    constructor(settings: MyHeadingsSettings) {
+    private readonly dispatch: HeadingChangeDispatcher;
+    private readonly getTabSize: (editor: Editor) => number;
+    constructor(settings: MyHeadingsSettings, dependencies: InsertDependencies = {}) {
         this.settings = settings;
+        this.dispatch = dependencies.dispatch ?? dispatchHeadingChanges;
+        this.getTabSize = dependencies.getTabSize ?? (() => TABSIZE);
     }
 
     editorCallback = (editor: Editor) => {
@@ -29,12 +43,12 @@ export class InsertHeadingAtCurrentLevel {
 
         const indentChanges = createListIndentChangesByListBehavior(editor, {
             parentIndentLevel: targetHeadingLevel - 1,
-            tabSize: this.settings.editor.tabSize,
+            tabSize: this.getTabSize(editor),
             listBehavior: this.settings.list.childrenBehavior,
             parentLineNumber: cursorLine,
         });
 
-        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
+        return this.dispatch(editor, [...headingChanges, ...indentChanges], cursorLine) === "applied";
     };
 
     createCommand = (): Command => {
@@ -49,8 +63,12 @@ export class InsertHeadingAtCurrentLevel {
 
 export class InsertHeadingAtDeeperLevel {
     settings: MyHeadingsSettings;
-    constructor(settings: MyHeadingsSettings) {
+    private readonly dispatch: HeadingChangeDispatcher;
+    private readonly getTabSize: (editor: Editor) => number;
+    constructor(settings: MyHeadingsSettings, dependencies: InsertDependencies = {}) {
         this.settings = settings;
+        this.dispatch = dependencies.dispatch ?? dispatchHeadingChanges;
+        this.getTabSize = dependencies.getTabSize ?? (() => TABSIZE);
     }
 
     editorCallback = (editor: Editor) => {
@@ -78,12 +96,12 @@ export class InsertHeadingAtDeeperLevel {
 
         const indentChanges = createListIndentChangesByListBehavior(editor, {
             parentIndentLevel: targetHeadingLevel - 1,
-            tabSize: this.settings.editor.tabSize,
+            tabSize: this.getTabSize(editor),
             listBehavior: this.settings.list.childrenBehavior,
             parentLineNumber: cursorLine,
         });
 
-        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
+        return this.dispatch(editor, [...headingChanges, ...indentChanges], cursorLine) === "applied";
     };
 
     createCommand = (): Command => {
@@ -98,8 +116,12 @@ export class InsertHeadingAtDeeperLevel {
 
 export class InsertHeadingAtHigherLevel {
     settings: MyHeadingsSettings;
-    constructor(settings: MyHeadingsSettings) {
+    private readonly dispatch: HeadingChangeDispatcher;
+    private readonly getTabSize: (editor: Editor) => number;
+    constructor(settings: MyHeadingsSettings, dependencies: InsertDependencies = {}) {
         this.settings = settings;
+        this.dispatch = dependencies.dispatch ?? dispatchHeadingChanges;
+        this.getTabSize = dependencies.getTabSize ?? (() => TABSIZE);
     }
 
     editorCallback = (editor: Editor) => {
@@ -122,12 +144,12 @@ export class InsertHeadingAtHigherLevel {
 
         const indentChanges = createListIndentChangesByListBehavior(editor, {
             parentIndentLevel: targetHeadingLevel,
-            tabSize: this.settings.editor.tabSize,
+            tabSize: this.getTabSize(editor),
             listBehavior: this.settings.list.childrenBehavior,
             parentLineNumber: cursorLine,
         });
 
-        return dispatchHeadingChanges(editor, [...headingChanges, ...indentChanges]) === "applied";
+        return this.dispatch(editor, [...headingChanges, ...indentChanges], cursorLine) === "applied";
     };
 
     createCommand = (): Command => {

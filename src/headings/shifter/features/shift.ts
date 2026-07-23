@@ -1,6 +1,10 @@
 import { type Command, type Editor, Notice } from "obsidian";
 import type { MyHeadingsSettings } from "../../../settings";
-import { composeLineChanges, dispatchHeadingChanges } from "../utils/editorChange";
+import {
+    composeLineChanges,
+    dispatchHeadingChanges,
+    type HeadingChangeDispatcher,
+} from "../utils/editorChange";
 import { getHeadingLines, checkHeading } from "../utils/markdown";
 import { applyHeading } from "./apply";
 import { t } from "../../../i18n/helpers";
@@ -32,12 +36,15 @@ export const decreaseHeading = (
 export class IncreaseHeading {
     settings: MyHeadingsSettings;
     includesNoHeadingsLine: boolean;
+    private readonly dispatch: HeadingChangeDispatcher;
     constructor(
         settings: MyHeadingsSettings,
         includesNoHeadingsLine: boolean,
+        dispatch: HeadingChangeDispatcher = dispatchHeadingChanges,
     ) {
         this.settings = settings;
         this.includesNoHeadingsLine = includesNoHeadingsLine;
+        this.dispatch = dispatch;
     }
 
     editorCallback = (editor: Editor) => {
@@ -63,7 +70,10 @@ export class IncreaseHeading {
             increaseHeading,
             this.settings,
         );
-        const status = dispatchHeadingChanges(editor, editorChange);
+        const cursorLine = editor.getCursor("from").line === editor.getCursor("to").line
+            ? editor.getCursor("from").line
+            : undefined;
+        const status = this.dispatch(editor, editorChange, cursorLine);
 
         // Since SHIFT is for items that already have a HEADING, it does not do `execOutdent`.
         return status === "applied";
@@ -95,8 +105,13 @@ export class IncreaseHeading {
 
 export class DecreaseHeading {
     settings: MyHeadingsSettings;
-    constructor(settings: MyHeadingsSettings) {
+    private readonly dispatch: HeadingChangeDispatcher;
+    constructor(
+        settings: MyHeadingsSettings,
+        dispatch: HeadingChangeDispatcher = dispatchHeadingChanges,
+    ) {
         this.settings = settings;
+        this.dispatch = dispatch;
     }
     editorCallback = (editor: Editor) => {
         // Get the lines that contain heading
@@ -123,7 +138,10 @@ export class DecreaseHeading {
             decreaseHeading,
             this.settings,
         );
-        return dispatchHeadingChanges(editor, editorChange) === "applied";
+        const cursorLine = editor.getCursor("from").line === editor.getCursor("to").line
+            ? editor.getCursor("from").line
+            : undefined;
+        return this.dispatch(editor, editorChange, cursorLine) === "applied";
     };
 
     createCommand = () => {

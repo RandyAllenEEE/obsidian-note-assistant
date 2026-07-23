@@ -19,12 +19,17 @@ describe('formula reconcile', () => {
         expect(applyEditsToText(source, plan.edits)).toBe('$$x \\tag{1}$$ text $$y \\tag{2}$$');
     });
 
-    it('clears only the exact expected tag and preserves wrong or custom tags', () => {
+    it('takes over numeric tags in the active format and preserves custom tags', () => {
         const exact = '$$x \\tag{1}$$';
         expect(applyEditsToText(exact, planFormulaReconcile(exact, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'clear').edits))
             .toBe('$$x $$');
 
-        for (const source of ['$$x \\tag{7}$$', '$$x \\tag{custom}$$', '$$x \\tag{\\text{custom}}$$']) {
+        expect(applyEditsToText(
+            '$$x \\tag{7}$$',
+            planFormulaReconcile('$$x \\tag{7}$$', DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'clear').edits,
+        )).toBe('$$x $$');
+
+        for (const source of ['$$x \\tag{custom}$$', '$$x \\tag{\\text{custom}}$$']) {
             const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'clear');
             expect(plan.edits).toEqual([]);
             expect(plan.ambiguousLines).toEqual([1]);
@@ -36,7 +41,7 @@ describe('formula reconcile', () => {
         const record: ManagedNumberRecord = {
             elementHash: fingerprintText('x'),
             token: '\\tag{7}',
-            configSignature: 'old',
+            configSignature: JSON.stringify({ mode: 'continuous', maxDepth: 4 }),
             leadingSpace: true,
         };
         const updated = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number', [record]);
@@ -77,7 +82,7 @@ describe('formula reconcile', () => {
         const record: ManagedNumberRecord = {
             elementHash: fingerprintText('x'),
             token: '\\tag{1.1-1}',
-            configSignature: 'old',
+            configSignature: JSON.stringify({ mode: 'heading-based', maxDepth: 4 }),
             leadingSpace: true,
         };
         const plan = planFormulaReconcile(source, formulaSettings, headingSettings, 'number', [record]);
@@ -88,17 +93,50 @@ describe('formula reconcile', () => {
             .toEqual([]);
     });
 
-    it('preserves unowned or multiple tags after a heading-level change without adding another tag', () => {
+    it('updates a strict unowned tag but preserves multiple tags without adding another tag', () => {
         const formulaSettings = { ...DEFAULT_MY_FORMULAS_SETTINGS, mode: 'heading-based' as const, maxDepth: 4 };
-        for (const source of [
-            '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1}$$',
-            '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1} \\tag{custom}$$',
-        ]) {
-            const plan = planFormulaReconcile(source, formulaSettings, headingSettings, 'number');
-            expect(plan.edits).toEqual([]);
-            expect(applyEditsToText(source, plan.edits)).toBe(source);
-            expect(plan.ambiguousLines).toEqual([3]);
-        }
+        const single = '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1}$$';
+        const singlePlan = planFormulaReconcile(single, formulaSettings, headingSettings, 'number');
+        expect(applyEditsToText(single, singlePlan.edits))
+            .toBe('# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1.1-1}$$');
+        expect(singlePlan.ambiguousLines).toEqual([]);
+
+        const multiple = '# 1 Parent\n### 1.1 Section\n$$x \\tag{1.1-1} \\tag{custom}$$';
+        const multiplePlan = planFormulaReconcile(multiple, formulaSettings, headingSettings, 'number');
+        expect(multiplePlan.edits).toEqual([]);
+        expect(multiplePlan.ambiguousLines).toEqual([3]);
+    });
+
+    it('recognizes an old heading-based tag while switching to continuous numbering', () => {
+        const oldFormulaSettings = { ...DEFAULT_MY_FORMULAS_SETTINGS, mode: 'heading-based' as const, maxDepth: 4 };
+        const source = '# 1 Parent\n## 1.1 Section\n$$x \\tag{1.1-7}$$';
+        const plan = planFormulaReconcile(
+            source,
+            DEFAULT_MY_FORMULAS_SETTINGS,
+            headingSettings,
+            'number',
+            [],
+            {
+                trigger: 'config-change',
+                acceptedFormulaConfigs: [oldFormulaSettings],
+                acceptedHeadingConfigs: [headingSettings],
+            },
+        );
+        expect(applyEditsToText(source, plan.edits))
+            .toBe('# 1 Parent\n## 1.1 Section\n$$x \\tag{1}$$');
+        expect(plan.ambiguousLines).toEqual([]);
+    });
+
+    it('does not let a corrupt record signature claim a custom tag', () => {
+        const source = '$$x \\tag{legacy}$$';
+        const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number', [{
+            elementHash: fingerprintText('x'),
+            token: '\\tag{legacy}',
+            configSignature: 'corrupt',
+            leadingSpace: true,
+        }]);
+        expect(plan.edits).toEqual([]);
+        expect(plan.ambiguousLines).toEqual([1]);
     });
 
     it('can merge heading and formula edits planned from the same immutable snapshot', () => {

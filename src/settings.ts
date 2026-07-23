@@ -17,7 +17,7 @@ export interface NumberingOwnershipStore {
 }
 
 export interface NoteAssistantSettings {
-    dataVersion: 1;
+    dataVersion: 2;
     myHeadings: MyHeadingsSettings;
     myFormulas: MyFormulasSettings;
     refreshInterval: number;
@@ -53,9 +53,6 @@ export interface MyHeadingsSettings {
     list: {
         childrenBehavior: 'outdent to zero' | 'sync with headings' | 'noting';
     };
-    editor: {
-        tabSize: number;
-    };
 }
 
 export const DEFAULT_MY_HEADINGS_SETTINGS: MyHeadingsSettings = {
@@ -74,7 +71,6 @@ export const DEFAULT_MY_HEADINGS_SETTINGS: MyHeadingsSettings = {
         surrounding: { bold: true, italic: true, userDefined: [] },
     },
     list: { childrenBehavior: 'outdent to zero' },
-    editor: { tabSize: 4 },
 };
 
 export interface MyFormulasSettings {
@@ -98,7 +94,7 @@ export const DEFAULT_OWNERSHIP_STORE: NumberingOwnershipStore = {
 };
 
 export const DEFAULT_SETTINGS: NoteAssistantSettings = {
-    dataVersion: 1,
+    dataVersion: 2,
     myHeadings: DEFAULT_MY_HEADINGS_SETTINGS,
     myFormulas: DEFAULT_MY_FORMULAS_SETTINGS,
     refreshInterval: 1000,
@@ -159,7 +155,6 @@ export function normalizeSettings(value: unknown): NoteAssistantSettings {
     const rawBeginning = isRecord(rawStyle.beginning) ? rawStyle.beginning : {};
     const rawSurrounding = isRecord(rawStyle.surrounding) ? rawStyle.surrounding : {};
     const rawList = isRecord(rawHeadings.list) ? rawHeadings.list : {};
-    const rawEditor = isRecord(rawHeadings.editor) ? rawHeadings.editor : {};
     const childrenBehavior = rawList.childrenBehavior;
     const normalizedChildrenBehavior = childrenBehavior === 'sync with headings' || childrenBehavior === 'noting' || childrenBehavior === 'outdent to zero'
         ? childrenBehavior
@@ -189,7 +184,6 @@ export function normalizeSettings(value: unknown): NoteAssistantSettings {
             },
         },
         list: { childrenBehavior: normalizedChildrenBehavior },
-        editor: { tabSize: boundedInteger(rawEditor.tabSize, DEFAULT_MY_HEADINGS_SETTINGS.editor.tabSize, 1, 16) },
     };
 
     const allowedStyles = new Set(['1', 'a', 'A', 'I', '一', '①']);
@@ -216,7 +210,7 @@ export function normalizeSettings(value: unknown): NoteAssistantSettings {
 
     const rawOwnership = isRecord(root.ownership) ? root.ownership : {};
     return {
-        dataVersion: 1,
+        dataVersion: 2,
         myHeadings,
         myFormulas,
         refreshInterval: boundedInteger(root.refreshInterval, DEFAULT_SETTINGS.refreshInterval, 100, 60000),
