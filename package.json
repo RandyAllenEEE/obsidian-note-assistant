@@ -1,6 +1,6 @@
 {
     "name": "obsidian-note-assistant",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "A note content assistant plugin for Obsidian, providing heading numbering and formula numbering features.",
     "main": "main.js",
     "scripts": {

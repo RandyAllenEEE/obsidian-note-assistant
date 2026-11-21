@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-note-assistant",
 	"name": "Note Assistant",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"minAppVersion": "1.4.4",
 	"description": "Note content assistant providing heading numbering and formula numbering features.",
 	"author": "Randy Allen",

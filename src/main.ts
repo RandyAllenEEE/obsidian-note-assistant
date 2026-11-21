@@ -13,6 +13,8 @@ import { FormulasManager } from './formulas/manager';
 import { renderFormulasSettings } from './formulas/settings-ui';
 import { AutoNumberingController } from './auto-numbering';
 
+import { createSettingsList } from './settings-list';
+
 export default class NoteAssistantPlugin extends Plugin {
     settings: NoteAssistantSettings;
     headingsManager: HeadingsManager;
@@ -139,12 +141,11 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         const { containerEl } = this;
 
         containerEl.empty();
-        containerEl.createEl('h2', { text: t('settings.title') });
+        containerEl.addClass('note-assistant-settings');
 
-        // Global Settings Section
-        containerEl.createEl('h3', { text: t('settings.global') });
+        const general = createSettingsList(containerEl);
 
-        new Setting(containerEl)
+        new Setting(general)
             .setName(t('settings.refreshInterval'))
             .setDesc(t('settings.refreshIntervalDescription'))
             .addText(text => text
@@ -157,10 +158,6 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     }
                 }));
-
-        containerEl.createEl('br');
-        containerEl.createEl('h3', { text: t('settings.modules') });
-
 
         // MyHeadings Section
         this.addPluginSection(
@@ -204,31 +201,17 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         onToggle: (val: boolean) => void,
         renderBody: (el: HTMLElement) => void
     ) {
-        const details = containerEl.createEl('details');
+        const details = createSettingsList(containerEl).createEl('details', { cls: 'assistant-module-frame' });
         details.open = false;
-        details.style.marginBottom = '1em';
-        details.style.border = '1px solid var(--background-modifier-border)';
-        details.style.borderRadius = '5px';
 
-        const summary = details.createEl('summary');
-        summary.style.display = 'flex';
-        summary.style.alignItems = 'center';
-        summary.style.justifyContent = 'space-between';
-        summary.style.padding = '0.5em 1em';
-        summary.style.cursor = 'pointer';
-        summary.style.backgroundColor = 'var(--background-secondary)';
-        summary.style.borderTopLeftRadius = '5px';
-        summary.style.borderTopRightRadius = '5px';
+        const summary = details.createEl('summary', { cls: 'assistant-settings-section-header' });
 
         const titleContainer = summary.createEl('div', { cls: 'settings-section-title' });
-        titleContainer.style.display = 'flex';
-        titleContainer.style.alignItems = 'center';
-        titleContainer.style.gap = '10px';
         titleContainer.createEl('strong', { text: title });
 
         // Toggle Switch Container
         const toggleContainer = summary.createEl('div');
-        toggleContainer.onclick = (e) => e.preventDefault();
+        toggleContainer.onclick = (e) => e.stopPropagation();
 
         const toggleSetting = new Setting(toggleContainer)
             .addToggle(toggle => toggle
@@ -240,8 +223,6 @@ class NoteAssistantSettingsTab extends PluginSettingTab {
         toggleSetting.infoEl.remove(); // Remove empty info
 
         const content = details.createEl('div');
-        content.style.padding = '1em';
-        content.style.borderTop = '1px solid var(--background-modifier-border)';
 
         if (isEnabled) {
             renderBody(content);

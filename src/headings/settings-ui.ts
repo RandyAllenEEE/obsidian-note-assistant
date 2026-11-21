@@ -8,23 +8,13 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     const settings = manager.plugin.settings.myHeadings;
 
     // === Auto Numbering Section ===
-    const autoNumberingDetails = containerEl.createEl('details');
+    const autoNumberingDetails = containerEl.createEl('details', { cls: 'assistant-module-frame' });
     autoNumberingDetails.open = false;
-    autoNumberingDetails.style.marginBottom = '10px';
-    autoNumberingDetails.style.border = '1px solid var(--background-modifier-border)';
-    autoNumberingDetails.style.borderRadius = '5px';
-    autoNumberingDetails.style.padding = '0.5em';
 
-    const autoNumberingSummary = autoNumberingDetails.createEl('summary');
+    const autoNumberingSummary = autoNumberingDetails.createEl('summary', { cls: 'assistant-settings-section-header' });
     autoNumberingSummary.setText(t('headings.autoNumbering'));
-    autoNumberingSummary.style.fontWeight = 'bold';
-    autoNumberingSummary.style.cursor = 'pointer';
-    autoNumberingSummary.style.outline = 'none';
 
     const autoNumberingContent = autoNumberingDetails.createEl('div');
-    autoNumberingContent.style.marginTop = '10px';
-    autoNumberingContent.style.paddingLeft = '5px';
-    autoNumberingContent.style.borderLeft = '2px solid var(--background-modifier-border)';
 
     new Setting(autoNumberingContent)
         .setName(t('headings.autoNumber'))
@@ -69,11 +59,7 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     // Style Grid
     autoNumberingContent.createEl('h3', { text: t('headings.styles') });
     autoNumberingContent.createEl('p', { text: t('headings.stylesCaseNote') });
-    const stylesContainer = autoNumberingContent.createEl('div');
-    stylesContainer.style.display = 'grid';
-    stylesContainer.style.gridTemplateColumns = '0.5fr 1fr 1fr 1fr';
-    stylesContainer.style.gap = '10px';
-    stylesContainer.style.marginBottom = '20px';
+    const stylesContainer = autoNumberingContent.createEl('div', { cls: 'assistant-heading-grid' });
 
     // Headers
     stylesContainer.createEl('div', { text: t('common.level'), attr: { style: 'font-weight: bold;' } });
@@ -128,23 +114,13 @@ export function renderHeadingsSettings(containerEl: HTMLElement, manager: Headin
     containerEl.createEl('br');
 
     // === Heading Shifter Section ===
-    const shifterDetails = containerEl.createEl('details');
+    const shifterDetails = containerEl.createEl('details', { cls: 'assistant-module-frame' });
     shifterDetails.open = false;
-    shifterDetails.style.marginBottom = '10px';
-    shifterDetails.style.border = '1px solid var(--background-modifier-border)';
-    shifterDetails.style.borderRadius = '5px';
-    shifterDetails.style.padding = '0.5em';
 
-    const shifterSummary = shifterDetails.createEl('summary');
+    const shifterSummary = shifterDetails.createEl('summary', { cls: 'assistant-settings-section-header' });
     shifterSummary.setText(t('shifter.title'));
-    shifterSummary.style.fontWeight = 'bold';
-    shifterSummary.style.cursor = 'pointer';
-    shifterSummary.style.outline = 'none';
 
     const shifterContent = shifterDetails.createEl('div');
-    shifterContent.style.marginTop = '10px';
-    shifterContent.style.paddingLeft = '5px';
-    shifterContent.style.borderLeft = '2px solid var(--background-modifier-border)';
 
     new Setting(shifterContent)
         .setName(t('shifter.lowerLimit'))
