@@ -1,4 +1,4 @@
-# Obsidian Note Assistant
+# Note Assistant
 
 A comprehensive toolkit for structural document management in Obsidian, designed to automate headings, formulas, and outline organization.
 
@@ -75,20 +75,28 @@ Rapidly reorganize your document structure with powerful hotkeys.
 ## 📦 Installation
 
 ### From Release
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/yourusername/obsidian-note-assistant/releases).
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/RandyAllenEEE/obsidian-note-assistant/releases/latest).
 2. Create a folder named `obsidian-note-assistant` in your vault's `.obsidian/plugins/` directory.
 3. Place the files into this folder.
-4. Restart Obsidian and enable the plugin.
+4. Restart Obsidian and enable Note Assistant.
+
+For upgrades, replace the three release files in the existing folder and keep `data.json`.
 
 ### Manual Build
 ```bash
-git clone https://github.com/yourusername/obsidian-note-assistant.git
+git clone https://github.com/RandyAllenEEE/obsidian-note-assistant.git
 cd obsidian-note-assistant
-npm install
+npm ci
 npm run build
 ```
 
----
+Build with Node.js 24. The installable files are in `build/`.
+
+### Publishing
+
+Run the checks in [the release workflow](.github/workflows/release.yml) and push the updated default branch. Once its checks pass, push only the `X.Y.Z` tag that matches `manifest.json`. The tag run rebuilds, packages, and verifies the attachments before publishing the GitHub Release.
+
+For the first `1.0.0` release, use a fresh `--no-tags` clone of `master` and tag the commit that passed CI. The old upstream tag can remain in the development clone.
 
 ## 🚀 Usage
 
@@ -137,4 +145,6 @@ MIT License
 
 Copyright (c) 2026 Randy Allen
 
-This project integrates code from multiple open-source plugins (see Acknowledgments). Each original plugin retains its original license and copyright. The integration work, TypeScript refactoring, and enhancements are licensed under MIT.
+The [MIT license](LICENSE) covers Note Assistant and preserves the Number
+Headings copyright notice. The [Heading Shifter MIT notice](licenses/Heading-Shifter-MIT.txt)
+is retained for its code. Both notices are included in the built plugin.

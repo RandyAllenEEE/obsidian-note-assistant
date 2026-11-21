@@ -27,5 +27,10 @@
         "tslib": "2.4.0",
         "typescript": "^5.9.3",
         "vitest": "^4.1.10"
+    },
+    "overrides": {
+        "obsidian": {
+            "moment": "2.31.0"
+        }
     }
 }
