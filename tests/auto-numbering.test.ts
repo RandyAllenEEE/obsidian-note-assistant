@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownView, noticeMessages } from 'obsidian';
 import { AutoNumberingController } from '../src/auto-numbering';
 import { DEFAULT_MY_FORMULAS_SETTINGS, DEFAULT_MY_HEADINGS_SETTINGS } from '../src/settings';
+import { planFormulaReconcile } from '../src/formulas/reconcile';
+import { planHeadingReconcile } from '../src/headings/reconcile';
+import { applyEditsToText } from '../src/utils/reconcile';
 
 type EventCallback = (...args: any[]) => void;
 
@@ -129,6 +132,47 @@ describe('auto-numbering trigger boundaries', () => {
             'number',
             { trigger: 'auto-blur' },
         );
+    });
+
+    it('reconciles an absolute-value equation and following tags in one blur transaction, then stays idempotent', async () => {
+        const harness = createHarness({
+            frontmatter: {
+                'number headings': 'auto, 1-6, 111111, ....., 111111',
+                'number formulas': 'auto, heading-based(3)',
+            },
+            formulasEnabled: true,
+        });
+        let source = '### 1.1.1 Section\n$$\n|G(j\\omega)|=1\n\\tag{1.1.1-28}\n$$\n\nProse.\n\n$$K\\tag{1.1.1-29}$$';
+        harness.editor.getValue.mockImplementation(() => source);
+        harness.editor.offsetToPos.mockImplementation(offset => {
+            const lines = source.slice(0, offset).split('\n');
+            return { line: lines.length - 1, ch: lines[lines.length - 1].length };
+        });
+        harness.editor.transaction.mockImplementation(({ changes }) => {
+            const offset = (position: { line: number; ch: number }) => {
+                const lines = source.split('\n');
+                return lines.slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.ch;
+            };
+            source = applyEditsToText(source, changes.map((change: any) => ({
+                from: offset(change.from), to: offset(change.to), text: change.text,
+            })));
+            harness.workspaceEvents.get('editor-change')?.(harness.editor, harness.view);
+        });
+        harness.headingsManager.buildPlan.mockImplementation((_file, text, parsed, intent) =>
+            planHeadingReconcile(text, parsed.settings, intent));
+        harness.formulasManager.buildPlan.mockImplementation((_file, text, parsed, headings, intent) =>
+            planFormulaReconcile(text, parsed.settings, headings.settings, intent));
+        harness.workspaceEvents.get('editor-change')?.(harness.editor, harness.view);
+        await vi.runAllTimersAsync();
+        expect(harness.editor.transaction).not.toHaveBeenCalled();
+        harness.windowEvents.get('blur')?.();
+        await vi.runAllTimersAsync();
+        expect(source).toBe('### 1.1.1 Section\n$$\n|G(j\\omega)|=1\n\\tag{1.1.1-1}\n$$\n\nProse.\n\n$$K\\tag{1.1.1-2}$$');
+        expect(harness.editor.transaction).toHaveBeenCalledTimes(1);
+        harness.workspaceEvents.get('editor-change')?.(harness.editor, harness.view);
+        harness.windowEvents.get('blur')?.();
+        await vi.runAllTimersAsync();
+        expect(harness.editor.transaction).toHaveBeenCalledTimes(1);
     });
 
     it('does not let a none cleanup task run another module auto policy while editing', async () => {

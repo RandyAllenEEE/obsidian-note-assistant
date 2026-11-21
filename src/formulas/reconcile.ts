@@ -65,11 +65,20 @@ function isEscaped(line: string, index: number): boolean {
 export function scanDisplayMathBlocks(source: string): DisplayMathBlock[] {
     const blocks: DisplayMathBlock[] = [];
     let opening: { offset: number; line: number } | undefined;
-    for (const line of scanMarkdownLines(source)) {
+    // A leading pipe is a table candidate only outside math. Inside a display
+    // block it is often an absolute value or norm and must not discard the opener.
+    for (const line of scanMarkdownLines(source, { ignorePipeLines: false })) {
         if (line.ignored) {
             opening = undefined;
             continue;
         }
+        // Do not let a missing delimiter consume the next Markdown paragraph or
+        // section. In particular an orphan closing $$ must not number prose.
+        if (!line.text.trim() || /^\s{0,3}#{1,6}(?:[ \t]|$)/.test(line.text)) {
+            opening = undefined;
+            continue;
+        }
+        if (!opening && /^\s*\|/.test(line.text)) continue;
         const codeRanges = inlineCodeRanges(line.text);
         let index = 0;
         while (index < line.text.length - 1) {
@@ -89,16 +98,29 @@ export function scanDisplayMathBlocks(source: string): DisplayMathBlock[] {
                 continue;
             }
             const offset = line.start + index;
+            // An opener on a new line with its own equation cannot close an
+            // unfinished previous block. Resynchronize at that new opener.
+            if (opening && opening.line !== line.number
+                && !line.text.slice(0, index).trim()
+                && line.text.slice(index + 2).trim()) {
+                opening = undefined;
+            }
             if (!opening) {
                 opening = { offset, line: line.number };
             } else {
-                blocks.push({
-                    start: opening.offset,
-                    end: offset + 2,
-                    contentStart: opening.offset + 2,
-                    contentEnd: offset,
-                    line: opening.line,
-                });
+                const contentStart = opening.offset + 2;
+                // Empty/tag-only delimiter pairs can be debris from an incomplete
+                // edit. They have no equation to number.
+                const content = source.slice(contentStart, offset).replace(/\\tag\{[^{}]*\}/g, '').trim();
+                if (content) {
+                    blocks.push({
+                        start: opening.offset,
+                        end: offset + 2,
+                        contentStart,
+                        contentEnd: offset,
+                        line: opening.line,
+                    });
+                }
                 opening = undefined;
             }
             index += 2;

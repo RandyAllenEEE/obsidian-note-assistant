@@ -40,7 +40,7 @@ export function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function scanMarkdownLines(source: string): MarkdownLine[] {
+export function scanMarkdownLines(source: string, { ignorePipeLines = true } = {}): MarkdownLine[] {
     const lines: MarkdownLine[] = [];
     let offset = 0;
     const rawLines = source.split('\n');
@@ -73,7 +73,7 @@ export function scanMarkdownLines(source: string): MarkdownLine[] {
                 ignored = true;
                 fenceChar = open[1][0];
                 fenceLength = open[1].length;
-            } else if (/^\s*\|/.test(text)) {
+            } else if (ignorePipeLines && /^\s*\|/.test(text)) {
                 ignored = true;
             }
         }

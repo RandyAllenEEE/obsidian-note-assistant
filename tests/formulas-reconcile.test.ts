@@ -12,6 +12,77 @@ const headingSettings: MyHeadingsSettings = {
 };
 
 describe('formula reconcile', () => {
+    it('keeps absolute-value lines inside display math and never numbers the prose between formulas', () => {
+        const source = [
+            '### 1.1.1 Section',
+            '$$',
+            '|G(j\\omega)|=1',
+            '\\tag{1.1.1-28}',
+            '$$',
+            '',
+            'Explanation between equations.',
+            '',
+            '$$K_i/K_p=r/L\\tag{1.1.1-29}$$',
+        ].join('\n');
+        const config = { ...DEFAULT_MY_FORMULAS_SETTINGS, mode: 'heading-based' as const, maxDepth: 3 };
+        const plan = planFormulaReconcile(source, config, headingSettings, 'number');
+        expect(scanDisplayMathBlocks(source).map(block => source.slice(block.contentStart, block.contentEnd)))
+            .toEqual(['\n|G(j\\omega)|=1\n\\tag{1.1.1-28}\n', 'K_i/K_p=r/L\\tag{1.1.1-29}']);
+        const result = applyEditsToText(source, plan.edits);
+        expect(result).toBe(source.replace('-28}', '-1}').replace('-29}', '-2}'));
+        expect(planFormulaReconcile(result, config, headingSettings, 'number', plan.records).edits).toEqual([]);
+        expect(applyEditsToText(result, planFormulaReconcile(result, config, headingSettings, 'clear').edits))
+            .toContain('$$\n|G(j\\omega)|=1\n\n$$\n\nExplanation between equations.\n\n$$K_i/K_p=r/L$$');
+    });
+
+    it('does not pair unclosed math across a paragraph or heading boundary', () => {
+        const source = [
+            '$$broken',
+            '',
+            'Ordinary prose.',
+            '',
+            '$$valid$$',
+            '$$another broken',
+            '# Next section',
+            '$$also valid$$',
+        ].join('\n');
+        const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number');
+        expect(scanDisplayMathBlocks(source).map(block => source.slice(block.contentStart, block.contentEnd)))
+            .toEqual(['valid', 'also valid']);
+        expect(applyEditsToText(source, plan.edits))
+            .toBe(source.replace('$$valid$$', () => '$$valid \\tag{1}$$').replace('$$also valid$$', () => '$$also valid \\tag{2}$$'));
+    });
+
+    it('resynchronizes at a new equation after an adjacent unfinished opener', () => {
+        const source = '$$broken\n$$valid$$\n$$\nunclosed';
+        const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number');
+        expect(plan.blocks.map(block => source.slice(block.contentStart, block.contentEnd))).toEqual(['valid']);
+        expect(applyEditsToText(source, plan.edits)).toBe('$$broken\n$$valid \\tag{1}$$\n$$\nunclosed');
+    });
+
+    it.each(['\n', '\r\n'])('handles norms, empty delimiter debris, and table exclusions with %j line endings', newline => {
+        const source = [
+            '| Equation | Description |',
+            '| --- | --- |',
+            '| $$table$$ | ignored |',
+            '$$',
+            '\\tag{8}',
+            '$$',
+            '',
+            '$$',
+            '|x| + \\|y\\| = z',
+            '$$',
+            '',
+            '$$next$$',
+        ].join(newline);
+        const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number');
+        expect(plan.blocks).toHaveLength(2);
+        expect(applyEditsToText(source, plan.edits)).toBe(
+            source.replace('|x| + \\|y\\| = z' + newline + '$$', () => '|x| + \\|y\\| = z' + newline + ' \\tag{1}$$')
+                .replace('$$next$$', () => '$$next \\tag{2}$$'),
+        );
+    });
+
     it('handles multiple display formulas on one line without overlapping edits', () => {
         const source = '$$x$$ text $$y$$';
         const plan = planFormulaReconcile(source, DEFAULT_MY_FORMULAS_SETTINGS, headingSettings, 'number');
